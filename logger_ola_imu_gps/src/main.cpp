@@ -63,6 +63,9 @@ void setup() {
   }
   SERIAL_USB->println();
 
+  board_time_manager.set_posix_timestamp(0);
+  board_time_manager.print_status();
+  SERIAL_USB->println();
   bool got_valid_fix = false;
   while (!got_valid_fix) {
     SERIAL_USB->println(F("Attempting to get initial GNSS fix..."));
@@ -72,8 +75,11 @@ void setup() {
       SERIAL_USB->println(F("Failed to get GNSS fix. Sleep and retry..."));
       wdt.restart();
       sleep_for_seconds(sleep_no_initial_gnss_fix_seconds);
+      blink_stat_led(3);
     }
   }
+  board_time_manager.print_status();
+  SERIAL_USB->println();
 
   blink_pwr_led(5);
 }
