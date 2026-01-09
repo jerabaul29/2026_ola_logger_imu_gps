@@ -13,7 +13,6 @@ void setup() {
   // Initialize watchdog timer
   wdt.configure(WDT_1HZ, 32, 32);
   wdt.start();
-
   blink_pwr_led(3);
 
   // Initialize serial over USB
@@ -63,6 +62,11 @@ void setup() {
   }
   SERIAL_USB->println();
 
+  blink_pwr_led(5);
+
+  // Initialize time manager from GNSS
+  // Keep trying to get a valid GNSS fix until successful
+  // As long as we do not have a valid fix, sleep for a while between attempts
   board_time_manager.set_posix_timestamp(0);
   board_time_manager.print_status();
   SERIAL_USB->println();
@@ -81,9 +85,13 @@ void setup() {
   board_time_manager.print_status();
   SERIAL_USB->println();
 
-  blink_pwr_led(5);
+  blink_pwr_led(7);
+  
+  // Start doing the logging to the SD card
+
 }
 
 void loop() {
-  wdt.restart();
+  // we should never get here
+  // if we get here, the watchdog will eventually restart the board
 }
