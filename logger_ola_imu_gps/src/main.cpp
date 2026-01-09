@@ -106,6 +106,11 @@ void setup() {
   // every 15 minutes: new file; filename: boot_fileindex_YYYYMMDD_HHMMSS.dat
   // with interrupt
 
+  while (true){
+    wdt.restart();
+    delay(1000);
+  }
+
 }
 
 void loop() {
