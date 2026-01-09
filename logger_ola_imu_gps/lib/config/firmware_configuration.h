@@ -23,6 +23,7 @@ static constexpr int BAUD_RATE_USB {1000000};
 
 // TODO: check that correct
 static constexpr int PORT_I2C_QWIIC_NUMBER {1};
+static constexpr int PIN_QWIIC_PWR {18};
 
 //TODO: check that correct
 static constexpr byte PIN_QWIIC_SCL {8};
@@ -34,11 +35,6 @@ static constexpr byte PIN_QWIIC_SDA {9};
 // LEDs
 static constexpr int PIN_PWR_LED {29};
 static constexpr int PIN_STAT_LED {19};
-
-// DS18B20
-// TODO: check what I used
-static constexpr int PIN_DS18B20_PWR {};
-static constexpr int PIN_DS18B20_DAT {};
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // misc

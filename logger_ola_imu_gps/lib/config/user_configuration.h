@@ -37,5 +37,10 @@ void print_sleep_configs(void);
 
 void print_all_user_configs(void);
 
+//////////////////////////////////////////////////////////////////////////////////////////
+
+// various business logics configs
+constexpr unsigned long timeout_initial_fix_gnss_seconds {1 * 60UL};
+constexpr unsigned long sleep_no_initial_gnss_fix_seconds {1 * 60 * 60UL};
 
 #endif

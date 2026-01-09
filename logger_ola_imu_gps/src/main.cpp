@@ -3,6 +3,9 @@
 #include "firmware_configuration.h"
 #include "watchdog_manager.h"
 #include "boot_counter.h"
+#include "time_manager.h"
+#include "gnss_manager.h"
+#include "sleep_manager.h"
 
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
@@ -35,7 +38,7 @@ void setup() {
   // Otherwise, keep the current boot count
   SERIAL_USB->print(F("Boot count: "));
   SERIAL_USB->println(boot_counter_instance.get_boot_number());
-  SERIAL_USB->print(F("Press y to reset boot count... "));
+  SERIAL_USB->println(F("Press y to reset boot count... "));
   wdt.restart();
   unsigned long startTime = millis();
   bool resetRequested = false;
@@ -59,6 +62,18 @@ void setup() {
     wdt.restart();
   }
   SERIAL_USB->println();
+
+  bool got_valid_fix = false;
+  while (!got_valid_fix) {
+    SERIAL_USB->println(F("Attempting to get initial GNSS fix..."));
+    wdt.restart();
+    got_valid_fix = gnss_manager.get_a_fix(timeout_initial_fix_gnss_seconds, true, true, true);
+    if (!got_valid_fix) {
+      SERIAL_USB->println(F("Failed to get GNSS fix. Sleep and retry..."));
+      wdt.restart();
+      sleep_for_seconds(sleep_no_initial_gnss_fix_seconds);
+    }
+  }
 
   blink_pwr_led(5);
 }
