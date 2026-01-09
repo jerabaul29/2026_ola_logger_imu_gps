@@ -58,7 +58,23 @@ bool GNSS_Manager::get_a_fix(unsigned long timeout_seconds, bool set_RTC_time, b
     }
 
     // now we know that we can talk to the gnss
-    gnss.setI2COutput(COM_TYPE_UBX); // Limit I2C output to UBX (disable the NMEA noise)
+    if (false){
+      gnss.setI2COutput(COM_TYPE_UBX | COM_TYPE_NMEA); // Limit I2C output to UBX (disable the NMEA noise)
+      gnss.disableNMEAMessage(UBX_NMEA_GLL, *SERIAL_USB);
+      gnss.disableNMEAMessage(UBX_NMEA_GSA, *SERIAL_USB);
+      gnss.disableNMEAMessage(UBX_NMEA_GSV, *SERIAL_USB);
+      gnss.enableNMEAMessage(UBX_NMEA_RMC, *SERIAL_USB);
+      gnss.disableNMEAMessage(UBX_NMEA_GGA, *SERIAL_USB);
+      gnss.disableNMEAMessage(UBX_NMEA_VTG, *SERIAL_USB);
+      gnss.setUART1Output(COM_TYPE_NMEA); //Turn off UBX and RTCM sentences on the UART1 interface
+      gnss.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT); //Save (only) the communications port settings to flash and BBR
+      gnss.setNMEAOutputPort(*SERIAL_USB);  //This will pipe all NMEA sentences to the serial port so we can see them
+    }
+
+    if (true){
+      gnss.setI2COutput(COM_TYPE_UBX); // Limit I2C output to UBX (disable the NMEA noise)
+    }
+
     delay(100);
 
     // If we are going to change the dynamic platform model, let's do it here.
