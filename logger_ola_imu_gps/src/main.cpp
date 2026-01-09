@@ -77,6 +77,7 @@ void setup() {
     got_valid_fix = gnss_manager.get_a_fix(timeout_initial_fix_gnss_seconds, false, true, false);
     if (!got_valid_fix) {
       SERIAL_USB->println(F("Failed to get GNSS fix. Sleep and retry..."));
+      turn_gnss_off();
       wdt.restart();
       sleep_for_seconds(sleep_no_initial_gnss_fix_seconds);
       blink_stat_led(3);
@@ -88,7 +89,7 @@ void setup() {
         wdt.restart();
         gnss_manager.get_a_fix(10, false, false, false);
       }
-      gnss_manager.get_a_fix(10, true, false, true);
+      gnss_manager.get_a_fix(10, true, false, false);
     }
   }
   board_time_manager.print_status();
@@ -97,6 +98,13 @@ void setup() {
   blink_pwr_led(7);
   
   // Start doing the logging to the SD card
+
+  // TODO:
+  // GNSS: 10Hz, lots of data logged
+  // GNSS: PPS
+  // IMU: max quality
+  // every 15 minutes: new file; filename: boot_fileindex_YYYYMMDD_HHMMSS.dat
+  // with interrupt
 
 }
 

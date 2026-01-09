@@ -19,6 +19,8 @@ struct fix_information{
   long longitude;
 };
 
+void turn_gnss_on(void);
+void turn_gnss_off(void);
 
 class GNSS_Manager{
   public:
