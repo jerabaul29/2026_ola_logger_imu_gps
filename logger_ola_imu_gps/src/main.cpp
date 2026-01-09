@@ -74,12 +74,21 @@ void setup() {
   while (!got_valid_fix) {
     SERIAL_USB->println(F("Attempting to get initial GNSS fix..."));
     wdt.restart();
-    got_valid_fix = gnss_manager.get_a_fix(timeout_initial_fix_gnss_seconds, true, true, true);
+    got_valid_fix = gnss_manager.get_a_fix(timeout_initial_fix_gnss_seconds, false, true, false);
     if (!got_valid_fix) {
       SERIAL_USB->println(F("Failed to get GNSS fix. Sleep and retry..."));
       wdt.restart();
       sleep_for_seconds(sleep_no_initial_gnss_fix_seconds);
       blink_stat_led(3);
+    }
+    else {
+      SERIAL_USB->println(F("Successfully obtained GNSS fix."));
+      SERIAL_USB->println(F("Get a few fixes to make sure the quality is good before setting clock..."));
+      for (int i=0; i<10; i++) {
+        wdt.restart();
+        gnss_manager.get_a_fix(10, false, false, false);
+      }
+      gnss_manager.get_a_fix(10, true, false, true);
     }
   }
   board_time_manager.print_status();

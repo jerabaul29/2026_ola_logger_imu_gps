@@ -4,7 +4,7 @@
 #include "etl/vector.h"
 
 #include <Wire.h> // Needed for I2C
-#include <SparkFun_u-blox_GNSS_Arduino_Library.h> //http://librarymanager/All#SparkFun_u-blox_GNSS
+#include <SparkFun_u-blox_GNSS_v3.h> //http://librarymanager/All#SparkFun_u-blox_GNSS
 
 #include "time_manager.h"
 #include "watchdog_manager.h"
