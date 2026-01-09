@@ -15,16 +15,12 @@ void user_sleep_pre_actions(void)
 
   wdt.restart();
 
-  if (USE_SERIAL_PRINT){
-    SERIAL_USB->end();
-  }
+  SERIAL_USB->end();
   
 }
 void user_sleep_post_actions(void)
 {
-  if (USE_SERIAL_PRINT){
-    SERIAL_USB->begin(BAUD_RATE_USB);
-  }
+  SERIAL_USB->begin(BAUD_RATE_USB);
 }
 
 //--------------------------------------------------------------------------------
@@ -84,20 +80,15 @@ void sleep_for_seconds(unsigned long const number_of_seconds)
 {
   if (number_of_seconds > max_sleep_seconds)
   {
-    if (USE_SERIAL_PRINT)
-    {
-      PRINT_VAR(number_of_seconds);
-      SERIAL_USB->println(F(" is suspicious; cut!"));
-    }
+    PRINT_VAR(number_of_seconds);
+    SERIAL_USB->println(F(" is suspicious; cut!"));
     sleep_for_seconds(max_sleep_seconds);
     return;
   }
 
-  if (USE_SERIAL_PRINT){
-    SERIAL_USB->print(F("sleep for "));
-    SERIAL_USB->print(number_of_seconds);
-    SERIAL_USB->println(F(" seconds"));
-  }
+  SERIAL_USB->print(F("sleep for "));
+  SERIAL_USB->print(number_of_seconds);
+  SERIAL_USB->println(F(" seconds"));
 
   hal_prepare_to_sleep();
   user_sleep_pre_actions();
@@ -134,9 +125,7 @@ void sleep_for_seconds(unsigned long const number_of_seconds)
   hal_wake_up();
   user_sleep_post_actions();
 
-  if (USE_SERIAL_PRINT){
-    SERIAL_USB->print(F("wakeup"));
-  }
+  SERIAL_USB->print(F("wakeup"));
 }
 
 unsigned long seconds_to_sleep_until_posix(kiss_time_t const posix_timestamp)
@@ -148,17 +137,13 @@ unsigned long seconds_to_sleep_until_posix(kiss_time_t const posix_timestamp)
     number_seconds_to_sleep = posix_timestamp - board_time_manager.get_posix_timestamp();
     if (number_seconds_to_sleep > max_sleep_seconds)
     {
-      if (USE_SERIAL_PRINT){
-        SERIAL_USB->println(F("W suspicious posix sleep duration; cut!"));
-      }
+      SERIAL_USB->println(F("W suspicious posix sleep duration; cut!"));
       number_seconds_to_sleep = max_sleep_seconds;
     }
   }
   else
   {
-    if (USE_SERIAL_PRINT){
-      SERIAL_USB->println(F("W invalid posix; sleep default duration"));
-    }
+    SERIAL_USB->println(F("W invalid posix; sleep default duration"));
     number_seconds_to_sleep = max_sleep_seconds;
   }
 
@@ -167,10 +152,8 @@ unsigned long seconds_to_sleep_until_posix(kiss_time_t const posix_timestamp)
 
 void sleep_until_posix(kiss_time_t const posix_timestamp)
 {
-  if (USE_SERIAL_PRINT){
-    SERIAL_USB->print(F("Sleep until posix "));
-    SERIAL_USB->println(posix_timestamp);
-  }
+  SERIAL_USB->print(F("Sleep until posix "));
+  SERIAL_USB->println(posix_timestamp);
 
   unsigned long number_seconds_to_sleep = seconds_to_sleep_until_posix(posix_timestamp);
   sleep_for_seconds(number_seconds_to_sleep);
