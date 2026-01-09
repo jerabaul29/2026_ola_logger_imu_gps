@@ -11,7 +11,7 @@ void setup() {
   wdt.configure(WDT_1HZ, 32, 32);
   wdt.start();
 
-  blink_stat_led(3);
+  blink_pwr_led(3);
 
   // Initialize serial over USB
   SERIAL_USB->begin(BAUD_RATE_USB);
@@ -59,6 +59,8 @@ void setup() {
     wdt.restart();
   }
   SERIAL_USB->println();
+
+  blink_pwr_led(5);
 }
 
 void loop() {

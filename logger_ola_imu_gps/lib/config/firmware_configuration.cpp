@@ -40,14 +40,22 @@ uint64_t read_chip_id(void){
     return chip_id;
 }
 
+void blink_pwr_led(int num_blinks, int millis_on, int millis_off){
+    pinMode(PIN_PWR_LED, OUTPUT);
+    for(int i=0; i<num_blinks; i++){
+        digitalWrite(PIN_PWR_LED, HIGH);
+        delay(millis_on);
+        digitalWrite(PIN_PWR_LED, LOW);
+        delay(millis_off);
+    }
+}
+
 void blink_stat_led(int num_blinks, int millis_on, int millis_off){
     pinMode(PIN_STAT_LED, OUTPUT);
     for(int i=0; i<num_blinks; i++){
         digitalWrite(PIN_STAT_LED, HIGH);
         delay(millis_on);
-        wdt.restart();
         digitalWrite(PIN_STAT_LED, LOW);
         delay(millis_off);
-        wdt.restart();
     }
 }

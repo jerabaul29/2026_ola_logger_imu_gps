@@ -11,7 +11,6 @@
 #include "Arduino.h"
 #include "macro_utils.h"
 #include "print_utils.h"
-#include "watchdog_manager.h"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // serial over USB related 
@@ -54,6 +53,7 @@ void print_firmware_config(void);
 
 uint64_t read_chip_id(void);
 
+void blink_pwr_led(int num_blinks, int millis_on=200, int millis_off=200);
 void blink_stat_led(int num_blinks, int millis_on=200, int millis_off=200);
 
 #endif
