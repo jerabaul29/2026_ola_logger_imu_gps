@@ -12,6 +12,8 @@
 #include "firmware_configuration.h"
 #include <SPI.h>
 #include "SdFat.h"
+#include "time_manager.h"
+#include "boot_counter.h"
 
 /**
  * @class SD_Card_Manager
@@ -47,12 +49,13 @@ public:
      * Removes existing file if present, opens a new file, truncates to zero,
      * and preallocates the specified size to improve write performance.
      * 
-     * @param filename Name of file to create (8.3 format recommended)
      * @param size_bytes Number of bytes to preallocate (0 = no preallocation)
      * @return true if file opened successfully, false otherwise
      * @note Closes any previously open file before opening new one
      */
-    bool preallocate_and_open_file(const char* filename, uint32_t size_bytes);
+    bool preallocate_and_open_file(uint32_t size_bytes);
+
+    void generate_filename();
     
     /**
      * @brief Sync and close the currently open file
@@ -100,6 +103,7 @@ private:
     FsFile sd_file;             ///< Currently open file object
     bool sd_initialized = false; ///< True if SD card successfully initialized
     bool file_open = false;     ///< True if a file is currently open
+    char filename_buffer[48];  ///< filename is DATA_BOOT_XXXX_TIME_YYMMDDTHHMMSS.dat
 };
 
 /// Global SD card manager instance

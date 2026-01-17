@@ -37,6 +37,23 @@ void microSDPowerOff()
     delay(10);
 }
 
+void SD_Card_Manager::generate_filename() {
+    // Generate filename in format: DATA_BOOT_XXXX_TIME_YYMMDDTHHMMSS.dat
+    uint32_t boot_count = boot_counter_instance.get_boot_number();
+    common_working_posix_timestamp = board_time_manager.get_posix_timestamp();
+    common_working_struct_YMDHMS = YMDHMS_from_posix_timestamp(common_working_posix_timestamp);
+        
+    snprintf(filename_buffer, sizeof(filename_buffer),
+             "DATA_BOOT_%04u_TIME_%02u%02u%02uT%02u%02u%02u.dat",
+             boot_count,
+             common_working_struct_YMDHMS.year,
+             common_working_struct_YMDHMS.month,
+             common_working_struct_YMDHMS.day,
+             common_working_struct_YMDHMS.hour,
+             common_working_struct_YMDHMS.minute,
+             common_working_struct_YMDHMS.second);
+}
+
 bool SD_Card_Manager::start() {
     if (sd_initialized) {
         return true;
@@ -100,7 +117,7 @@ void SD_Card_Manager::stop() {
     microSDPowerOff();
 }
 
-bool SD_Card_Manager::preallocate_and_open_file(const char* filename, uint32_t size_bytes) {
+bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes) {
     if (!sd_initialized) {
         SERIAL_USB->println(F("ERROR: SD card not initialized"));
         return false;
@@ -110,16 +127,17 @@ bool SD_Card_Manager::preallocate_and_open_file(const char* filename, uint32_t s
         close_and_sync_file();
     }
     
+    generate_filename();
     SERIAL_USB->print(F("Opening file: "));
-    SERIAL_USB->println(filename);
+    SERIAL_USB->println(filename_buffer);
     
     // Try to remove old file first
-    if (sd_card.exists(filename)) {
+    if (sd_card.exists(filename_buffer)) {
         SERIAL_USB->println(F("WARNING: Removing old file..."));
-        sd_card.remove(filename);
+        sd_card.remove(filename_buffer);
     }
     
-    if (!sd_file.open(filename, O_RDWR | O_CREAT)) {
+    if (!sd_file.open(filename_buffer, O_RDWR | O_CREAT)) {
         SERIAL_USB->println(F("ERROR: Failed to open test file!"));
         SERIAL_USB->print(F("Error code: "));
         SERIAL_USB->println(sd_card.card()->errorCode(), HEX);
