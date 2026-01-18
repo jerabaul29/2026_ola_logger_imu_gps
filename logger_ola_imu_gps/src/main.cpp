@@ -6,6 +6,7 @@
 #include "time_manager.h"
 #include "gnss_manager.h"
 #include "sleep_manager.h"
+#include "sd_card_manager.h"
 
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
@@ -113,7 +114,18 @@ void setup() {
   }
   
   // Start doing the logging to the SD card
-  
+  sd_card_manager.start();
+
+  constexpr uint32_t PREALLOCATE_SIZE_BYTES = 100 * 1024 * 1024; // Preallocate 100 MB
+
+  if (sd_card_manager.preallocate_and_open_file(PREALLOCATE_SIZE_BYTES)) {
+    SERIAL_USB->println(F("Log file opened and preallocated successfully."));
+    sd_card_manager.write_buffer((const uint8_t *)"Log start\n", 10);
+    delay(100);
+    sd_card_manager.close_and_sync_file();
+  } else {
+    SERIAL_USB->println(F("ERROR: Failed to open and preallocate log file on SD card."));
+  }
 
   // TODO:
   // GNSS: 10Hz, lots of data logged
@@ -126,6 +138,16 @@ void setup() {
     wdt.restart();
     delay(1000);
   }
+
+  // if we reach here, we have an issue:
+  // stop SD card manager and let watchdog reset the board
+  sd_card_manager.stop();
+
+  while (true)
+  {
+    // reboot
+  }
+  
 
 }
 
