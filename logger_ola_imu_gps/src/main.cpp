@@ -8,11 +8,22 @@
 #include "sleep_manager.h"
 #include "sd_card_manager.h"
 
+#include "Wire.h"
+#include <SparkFun_u-blox_GNSS_v3.h>
+
+#include <ISM330DHCXSensor.h>
+
+SFE_UBLOX_GNSS log_GNSS;
+
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
 static constexpr bool ENABLE_BLINK_PWR_LED = false;          ///< Enable power LED blinking on startup
 static constexpr bool ENABLE_BOOT_COUNTER = false;          ///< Enable boot counter functionality
 static constexpr bool ENABLE_GNSS = false;                    ///< Enable GNSS module
+
+TwoWire * I2C_QWIIC = &Wire1;
+
+ISM330DHCXSensor AccGyr(I2C_QWIIC, 0x6A);
 
 void setup() {
   /////////////////////////////////////////////////////////////////////////////////
@@ -118,15 +129,143 @@ void setup() {
   if (ENABLE_BLINK_PWR_LED){
     blink_pwr_led(7);
   }
-  
+
   /////////////////////////////////////////////////////////////////////////////////
-  // start I2C port
 
-  // start and set up GNSS itself
+  int start_attempt {1};
 
-  // set up interrupt on PPS
+  while (start_attempt<=5){
+    SERIAL_USB->print(F("Setup attempt #: "));
+    SERIAL_USB->println(start_attempt);
+    start_attempt += 1;
 
-  // start and set up ISM330DHCX
+    wdt.restart();
+    delay(10);
+    
+    ////////////////////////////////////////////////////
+    // start I2C port
+
+    SERIAL_USB->println(F("Starting I2C QWIIC..."));
+    pinMode(PIN_QWIIC_PWR, OUTPUT);
+    digitalWrite(PIN_QWIIC_PWR, HIGH); 
+    delay(100);
+    wdt.restart();
+
+    I2C_QWIIC->begin();
+    delay(100);
+    wdt.restart();
+    I2C_QWIIC->setClock(400000);
+    delay(100);
+    wdt.restart();
+    SERIAL_USB->println(F("I2C QWIIC started"));
+
+    ////////////////////////////////////////////////////
+    // start and set up GNSS itself
+
+    if (!log_GNSS.begin(*I2C_QWIIC)){
+        SERIAL_USB->println(F("problem starting GNSS"));
+        
+        I2C_QWIIC->end();
+        delay(500);
+        continue;
+    }
+    SERIAL_USB->println(F("success starting GNSS"));
+
+    log_GNSS.setI2COutput(COM_TYPE_UBX);
+    delay(100);
+    wdt.restart();
+    SERIAL_USB->println(F("GNSS set to UBX output"));
+    delay(100);
+
+    // if (!gnss.setDynamicModel(DYN_MODEL_PORTABLE)){
+    //   SERIAL_USB->println(F("GNSS could not set dynamic model"));
+    //   continue;
+    // }
+    // SERIAL_USB->println(F("GNSS dynamic model set to PORTABLE"));
+
+    log_GNSS.setNavigationFrequency(10);
+    delay(100);
+    wdt.restart();
+    uint8_t rate = log_GNSS.getNavigationFrequency();
+    SERIAL_USB->print("Current update rate: ");
+    SERIAL_USB->println(rate);
+ 
+    // wait until we get a fix
+    bool fix_obtained {false};
+    static constexpr unsigned long GNSS_FIX_WAIT_TIMEOUT_MS = 1000 * 60 * 2;
+    unsigned long start_wait_ms = millis();
+    SERIAL_USB->println(F("Waiting for GNSS fix..."));
+    while (millis() - start_wait_ms < GNSS_FIX_WAIT_TIMEOUT_MS){
+      if (log_GNSS.getFixType() >= 3){
+        fix_obtained = true;
+        SERIAL_USB->println(F("GNSS fix acquired."));
+        break;
+      }
+      delay(500);
+      wdt.restart();
+      SERIAL_USB->print(F("."));
+    }
+
+    if (!fix_obtained){
+      SERIAL_USB->println();
+      SERIAL_USB->println(F("Failed to obtain GNSS fix in time."));
+      continue;
+    }
+
+    SERIAL_USB->println(F("GNSS setup complete."));
+    wdt.restart();
+
+    ////////////////////////////////////////////////////
+    // start and set up ISM330DHCX
+
+    SERIAL_USB->println(F("Starting ISM330DHCX..."));
+
+    if (AccGyr.begin() != ISM330DHCX_OK){
+      SERIAL_USB->println(F("problem starting ISM330DHCX"));
+      
+      log_GNSS.end();
+      I2C_QWIIC->end();
+      delay(500);
+      continue;
+    }
+    SERIAL_USB->println(F("success starting ISM330DHCX"));
+    delay(100);
+    wdt.restart();
+
+    AccGyr.ACC_Enable();
+    delay(10);
+    AccGyr.GYRO_Enable();
+    delay(10);
+    wdt.restart();
+
+    AccGyr.ACC_SetOutputDataRate(833.0f);
+    delay(10);
+    AccGyr.GYRO_SetOutputDataRate(833.0f);
+    delay(10);
+    wdt.restart();
+
+    AccGyr.ACC_SetFullScale(ISM330DHCX_2g);
+    delay(10);
+    AccGyr.GYRO_SetFullScale(ISM330DHCX_125dps);
+    delay(10);
+    wdt.restart();
+
+    AccGyr.FIFO_ACC_Set_BDR(833.0f);
+    delay(10);
+    AccGyr.FIFO_GYRO_Set_BDR(833.0f);
+    delay(10);
+    wdt.restart();
+
+    AccGyr.FIFO_Set_Mode(ISM330DHCX_FIFO_MODE);
+    delay(10);
+    wdt.restart();
+
+    SERIAL_USB->println(F("ISM330DHCX setup complete."));
+
+    ////////////////////////////////////////////////////
+    SERIAL_USB->println(F("All set up, ready to log"));
+    break;
+  }
 
   /////////////////////////////////////////////////////////////////////////////////
   // log forever
@@ -156,13 +295,19 @@ void setup() {
   /////////////////////////////////////////////////////////////////////////////////
   // if we reach here, we have an issue:
   // stop SD card manager and let watchdog reset the board
+
+  SERIAL_USB->println(F("Stopping logging due to error..."));
   sd_card_manager.close_and_sync_file();
   delay(1000);
   sd_card_manager.stop();
 
+  SERIAL_USB->println(F("Entering infinite loop to trigger watchdog reset..."));
+
   while (true)
   {
     // reboot
+    wdt.restart();
+    delay(1000);
   }
 
 }
