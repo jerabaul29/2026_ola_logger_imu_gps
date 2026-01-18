@@ -192,9 +192,8 @@ bool SD_Card_Manager::write_buffer(const uint8_t* buffer, size_t size) {
         return false;
     }
 
-    digitalWrite(PIN_STAT_LED, toogle_state_led);
-    toogle_state_led = !toogle_state_led;
-    
+    digitalWrite(PIN_STAT_LED, HIGH);
     size_t written = sd_file.write(buffer, size);
+    digitalWrite(PIN_STAT_LED, LOW);
     return (written == size);
 }

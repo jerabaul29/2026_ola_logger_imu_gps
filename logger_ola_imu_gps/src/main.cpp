@@ -20,6 +20,12 @@
 static constexpr int TIMER_NUM = 2;
 static constexpr uint32_t TIMER_FREQ_HZ = 1000;
 
+int32_t acc_value[3];
+int32_t gyr_value[3];
+
+bool acc_available = false;
+bool gyr_available = false;
+
 SFE_UBLOX_GNSS log_GNSS;
 static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
 
@@ -95,7 +101,48 @@ extern "C" void am_ctimer_isr(void)
     // do our work here
 
     // read IMU data and store in deque as many as fifo entries
-    // TODO
+    uint16_t num_samples_available = 0;
+    AccGyr.FIFO_Get_Num_Samples(&num_samples_available);
+    if (num_samples_available > 2){
+      for (uint16_t i=0; i<num_samples_available; i++){
+        uint8_t tag;
+        // Check the FIFO tag
+        AccGyr.FIFO_Get_Tag(&tag);
+        switch (tag) {
+          // If we have a gyro tag, read the gyro data
+          case ISM330DHCX_GYRO_NC_TAG: {
+              AccGyr.FIFO_GYRO_Get_Axes(gyr_value);
+              gyr_available = true;
+              break;
+            }
+          // If we have an acc tag, read the acc data
+          case ISM330DHCX_XL_NC_TAG: {
+              AccGyr.FIFO_ACC_Get_Axes(acc_value);
+              acc_available = true;
+              break;
+            }
+          // We can discard other tags
+          default: {
+              break;
+            }
+        }
+
+        if (acc_available && gyr_available){
+          common_imu_reading.millis_reading = millis();
+          common_imu_reading.acc_x = acc_value[0];
+          common_imu_reading.acc_y = acc_value[1];
+          common_imu_reading.acc_z = acc_value[2];
+          common_imu_reading.gyr_x = gyr_value[0];
+          common_imu_reading.gyr_y = gyr_value[1];
+          common_imu_reading.gyr_z = gyr_value[2];
+
+          deque_IMU_readings.push_back(common_imu_reading);
+
+          acc_available = false;
+          gyr_available = false;
+        }
+      }
+    }
 
     // if time to read GNSS data, do it and store in deque
     if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ) == 0){
@@ -152,6 +199,10 @@ void setup() {
   print_firmware_config();
   SERIAL_USB->println();
 
+  boot_counter_instance.increment_boot_number();
+  delay(100);
+  wdt.restart();
+
   /////////////////////////////////////////////////////////////////////////////////
   // Print boot count and offer to reset it
   // If the user presses 'y' within 5 seconds, reset the boot count
@@ -178,8 +229,6 @@ void setup() {
       SERIAL_USB->println(F("Boot count reset."));
     } else {
       SERIAL_USB->println(F("No reset requested."));
-      boot_counter_instance.increment_boot_number();
-      delay(100);
       wdt.restart();
     }
     SERIAL_USB->println();
@@ -451,6 +500,25 @@ void setup() {
       //   - write the local buffer to SD card
 
       // with the GNSS PPS deque
+      am_hal_interrupt_master_disable();
+
+      if (deque_PPS_fixes.size() > 0){
+        should_log_data = true;
+        common_pps_fix = deque_PPS_fixes.front();
+        deque_PPS_fixes.pop_front();
+      }
+
+      am_hal_interrupt_master_enable();
+
+      if (should_log_data){
+        entry_kind[0] = '\n';
+        entry_kind[1] = 'P';
+        entry_kind[2] = 'P';
+        entry_kind[3] = 'S';
+        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(entry_kind), sizeof(entry_kind));
+        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&common_pps_fix), sizeof(common_pps_fix));
+        should_log_data = false;
+      }
 
       // with the GNSS fixes deque
       am_hal_interrupt_master_disable();
