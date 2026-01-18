@@ -25,9 +25,9 @@ static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
 
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
-static constexpr bool ENABLE_BLINK_PWR_LED = false;          ///< Enable power LED blinking on startup
-static constexpr bool ENABLE_BOOT_COUNTER = false;          ///< Enable boot counter functionality
-static constexpr bool ENABLE_GNSS_START = false;                    ///< Enable GNSS module
+static constexpr bool ENABLE_BLINK_PWR_LED = true;          ///< Enable power LED blinking on startup
+static constexpr bool ENABLE_BOOT_COUNTER = true;          ///< Enable boot counter functionality
+static constexpr bool ENABLE_GNSS_START = true;                    ///< Enable GNSS module
 
 TwoWire * I2C_QWIIC = &Wire1;
 
@@ -129,6 +129,8 @@ void setup() {
   if (ENABLE_BLINK_PWR_LED){
     blink_pwr_led(3);
   }
+
+  pinMode(PIN_STAT_LED, OUTPUT);
 
   /////////////////////////////////////////////////////////////////////////////////
   // Initialize serial over USB

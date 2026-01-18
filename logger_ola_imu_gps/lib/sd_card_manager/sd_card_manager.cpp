@@ -5,6 +5,8 @@
 
 #include "sd_card_manager.h"
 
+bool toogle_state_led = false;
+
 // Global instance
 SD_Card_Manager sd_card_manager;
 
@@ -189,6 +191,9 @@ bool SD_Card_Manager::write_buffer(const uint8_t* buffer, size_t size) {
         SERIAL_USB->println(F("ERROR: No file open for writing"));
         return false;
     }
+
+    digitalWrite(PIN_STAT_LED, toogle_state_led);
+    toogle_state_led = !toogle_state_led;
     
     size_t written = sd_file.write(buffer, size);
     return (written == size);
