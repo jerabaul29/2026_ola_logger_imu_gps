@@ -15,6 +15,7 @@ static constexpr bool ENABLE_BOOT_COUNTER = false;          ///< Enable boot cou
 static constexpr bool ENABLE_GNSS = false;                    ///< Enable GNSS module
 
 void setup() {
+  /////////////////////////////////////////////////////////////////////////////////
   // Initialize watchdog timer
   wdt.configure(WDT_1HZ, 32, 32);
   wdt.start();
@@ -23,10 +24,12 @@ void setup() {
     blink_pwr_led(3);
   }
 
+  /////////////////////////////////////////////////////////////////////////////////
   // Initialize serial over USB
   SERIAL_USB->begin(BAUD_RATE_USB);
   while (!(*SERIAL_USB) && millis() < SERIAL_TIMEOUT_MS);
 
+  /////////////////////////////////////////////////////////////////////////////////
   // Startup delay to allow time for serial monitor connection, uploading new firmware, etc.
   SERIAL_USB->println();
   SERIAL_USB->println(F("startup delay..."));
@@ -36,10 +39,12 @@ void setup() {
   SERIAL_USB->println(F("... done"));
   SERIAL_USB->println();
 
+  /////////////////////////////////////////////////////////////////////////////////
   // Print firmware configuration
   print_firmware_config();
   SERIAL_USB->println();
 
+  /////////////////////////////////////////////////////////////////////////////////
   // Print boot count and offer to reset it
   // If the user presses 'y' within 5 seconds, reset the boot count
   // Otherwise, keep the current boot count
@@ -76,6 +81,7 @@ void setup() {
     blink_pwr_led(5);
   }
 
+  /////////////////////////////////////////////////////////////////////////////////
   // Initialize time manager from GNSS
   // Keep trying to get a valid GNSS fix until successful
   // As long as we do not have a valid fix, sleep for a while between attempts
@@ -113,6 +119,18 @@ void setup() {
     blink_pwr_led(7);
   }
   
+  /////////////////////////////////////////////////////////////////////////////////
+  // start I2C port
+
+  // start and set up GNSS itself
+
+  // set up interrupt on PPS
+
+  // start and set up ISM330DHCX
+
+  /////////////////////////////////////////////////////////////////////////////////
+  // log forever
+
   // Start doing the logging to the SD card
   sd_card_manager.start();
 
@@ -134,20 +152,18 @@ void setup() {
   // every 15 minutes: new file; filename: boot_fileindex_YYYYMMDD_HHMMSS.dat
   // with interrupt
 
-  while (true){
-    wdt.restart();
-    delay(1000);
-  }
 
+  /////////////////////////////////////////////////////////////////////////////////
   // if we reach here, we have an issue:
   // stop SD card manager and let watchdog reset the board
+  sd_card_manager.close_and_sync_file();
+  delay(1000);
   sd_card_manager.stop();
 
   while (true)
   {
     // reboot
   }
-  
 
 }
 
