@@ -270,6 +270,10 @@ void setup() {
   /////////////////////////////////////////////////////////////////////////////////
   // log forever
 
+
+  // we do a new file every 15 minutes
+  board_time_manager.get_posix_timestamp();
+
   // Start doing the logging to the SD card
   sd_card_manager.start();
 
