@@ -32,12 +32,12 @@ static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
 static constexpr bool ENABLE_BLINK_PWR_LED = true;          ///< Enable power LED blinking on startup
-static constexpr bool ENABLE_BOOT_COUNTER = true;          ///< Enable boot counter functionality
-static constexpr bool ENABLE_GNSS_START = true;                    ///< Enable GNSS module
+static constexpr bool ENABLE_BOOT_COUNTER = false;          ///< Enable boot counter functionality
+static constexpr bool ENABLE_GNSS_START = false;                    ///< Enable GNSS module
 
 TwoWire * I2C_QWIIC = &Wire1;
 
-ISM330DHCXSensor AccGyr(I2C_QWIIC, 0x6A);
+ISM330DHCXSensor AccGyr(I2C_QWIIC, ISM330DHCX_I2C_ADD_H);
 
 static constexpr uint32_t seconds_in_15_minutes = 15 * 60;
 
@@ -46,7 +46,7 @@ constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 25 * 1024 * 1024; // Preallo
 static constexpr char str_start_logging[] = "Log start\n\n";
 static constexpr char str_stop_logging[] = "\n\nLog stop\n";
 
-static constexpr size_t SIZE_DEQUES {2048};
+static constexpr size_t SIZE_DEQUES {4096};
 
 struct PPS_fix {
   unsigned long millis_reading;
@@ -127,6 +127,7 @@ extern "C" void am_ctimer_isr(void)
         }
 
         if (acc_available){
+          Serial.print(F("X"));
           common_acc_reading.millis_reading = millis();
           common_acc_reading.acc_x = acc_value[0];
           common_acc_reading.acc_y = acc_value[1];
@@ -333,29 +334,31 @@ void setup() {
     SERIAL_USB->println(rate);
  
     // wait until we get a fix
-    bool fix_obtained {false};
-    static constexpr unsigned long GNSS_FIX_WAIT_TIMEOUT_MS = 1000 * 60 * 2;
-    unsigned long start_wait_ms = millis();
-    SERIAL_USB->println(F("Waiting for GNSS fix..."));
-    while (millis() - start_wait_ms < GNSS_FIX_WAIT_TIMEOUT_MS){
-      if (log_GNSS.getFixType() >= 3){
-        fix_obtained = true;
-        SERIAL_USB->println(F("GNSS fix acquired."));
-        break;
+    if (ENABLE_GNSS_START){
+      bool fix_obtained {false};
+      static constexpr unsigned long GNSS_FIX_WAIT_TIMEOUT_MS = 1000 * 60 * 2;
+      unsigned long start_wait_ms = millis();
+      SERIAL_USB->println(F("Waiting for GNSS fix..."));
+      while (millis() - start_wait_ms < GNSS_FIX_WAIT_TIMEOUT_MS){
+        if (log_GNSS.getFixType() >= 3){
+          fix_obtained = true;
+          SERIAL_USB->println(F("GNSS fix acquired."));
+          break;
+        }
+        delay(500);
+        wdt.restart();
+        SERIAL_USB->print(F("."));
       }
-      delay(500);
+
+      if (!fix_obtained){
+        SERIAL_USB->println();
+        SERIAL_USB->println(F("Failed to obtain GNSS fix in time."));
+        continue;
+      }
+
+      SERIAL_USB->println(F("GNSS setup complete."));
       wdt.restart();
-      SERIAL_USB->print(F("."));
     }
-
-    if (!fix_obtained){
-      SERIAL_USB->println();
-      SERIAL_USB->println(F("Failed to obtain GNSS fix in time."));
-      continue;
-    }
-
-    SERIAL_USB->println(F("GNSS setup complete."));
-    wdt.restart();
 
     ////////////////////////////////////////////////////
     // start and set up ISM330DHCX
@@ -511,6 +514,7 @@ void setup() {
       am_hal_interrupt_master_enable();
 
       if (should_log_data){
+        Serial.print(F("P"));
         entry_kind[0] = '\n';
         entry_kind[1] = 'P';
         entry_kind[2] = 'P';
@@ -532,6 +536,7 @@ void setup() {
       am_hal_interrupt_master_enable();
 
       if (should_log_data){
+        Serial.print(F("G"));
         entry_kind[0] = '\n';
         entry_kind[1] = 'G';
         entry_kind[2] = 'P';
@@ -553,6 +558,7 @@ void setup() {
       am_hal_interrupt_master_enable();
 
       if (should_log_data){
+        Serial.print(F("A"));
         entry_kind[0] = '\n';
         entry_kind[1] = 'A';
         entry_kind[2] = 'C';
