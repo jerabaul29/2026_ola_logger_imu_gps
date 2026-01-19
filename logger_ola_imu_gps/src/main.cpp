@@ -16,9 +16,6 @@
 #include "Embedded_Template_Library.h"
 #include "etl/deque.h"
 
-// Timer configuration
-static constexpr int TIMER_NUM = 2;
-static constexpr uint32_t TIMER_FREQ_HZ = 1000;
 
 int32_t acc_value[3];
 int32_t gyr_value[3];
@@ -27,17 +24,27 @@ bool acc_available = false;
 bool gyr_available = false;
 
 SFE_UBLOX_GNSS log_GNSS;
-static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
+static constexpr uint32_t GNSS_FREQUENCY_HZ = 1;
+// static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
+
+static constexpr float ISM330DHCX_ODR_HZ = 12.5f;
+// static constexpr float ISM330DHCX_ODR_HZ = 104.0f;
+
+// Timer configuration
+static constexpr int TIMER_NUM = 2;
+static constexpr uint32_t TIMER_FREQ_HZ = static_cast<uint32_t>(2 * ISM330DHCX_ODR_HZ);
+// static constexpr uint32_t TIMER_FREQ_HZ = 1000;
 
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
-static constexpr bool ENABLE_BLINK_PWR_LED = true;          ///< Enable power LED blinking on startup
-static constexpr bool ENABLE_BOOT_COUNTER = true;          ///< Enable boot counter functionality
-static constexpr bool ENABLE_GNSS_START = true;                    ///< Enable GNSS module
+static constexpr bool ENABLE_BLINK_PWR_LED = false;          ///< Enable power LED blinking on startup
+static constexpr bool ENABLE_BOOT_COUNTER = false;          ///< Enable boot counter functionality
+static constexpr bool ENABLE_GNSS_START = false;                    ///< Enable GNSS module
+static constexpr bool ENABLE_DEBUG_FASTPRINT = false;
 
 TwoWire * I2C_QWIIC = &Wire1;
 
-ISM330DHCXSensor AccGyr(I2C_QWIIC, 0x6A);
+ISM330DHCXSensor AccGyr(I2C_QWIIC, ISM330DHCX_I2C_ADD_L);
 
 static constexpr uint32_t seconds_in_15_minutes = 15 * 60;
 
@@ -100,14 +107,26 @@ extern "C" void am_ctimer_isr(void)
   {
     // do our work here
 
+    if (ENABLE_DEBUG_FASTPRINT){
+      SERIAL_USB->println();
+      SERIAL_USB->print(F("|ISR:"));
+      SERIAL_USB->print(millis());
+      SERIAL_USB->print(F(";"));
+    }
+
     // read IMU data and store in deque as many as fifo entries
     uint16_t num_samples_available = 0;
     AccGyr.FIFO_Get_Num_Samples(&num_samples_available);
-    if (num_samples_available > 2){
+    if (num_samples_available > 1){
       for (uint16_t i=0; i<num_samples_available; i++){
         uint8_t tag;
         // Check the FIFO tag
         AccGyr.FIFO_Get_Tag(&tag);
+        if (ENABLE_DEBUG_FASTPRINT){
+          SERIAL_USB->print(F("T:"));
+          SERIAL_USB->print(tag);
+          SERIAL_USB->print(F(";"));
+        }
         switch (tag) {
           // If we have a gyro tag, read the gyro data
           case ISM330DHCX_GYRO_NC_TAG: {
@@ -140,6 +159,9 @@ extern "C" void am_ctimer_isr(void)
 
           acc_available = false;
           gyr_available = false;
+          if (ENABLE_DEBUG_FASTPRINT){
+            SERIAL_USB->print(F("DI;"));
+          }
         }
       }
     }
@@ -158,6 +180,10 @@ extern "C" void am_ctimer_isr(void)
         common_gnss_reading.fix_type = log_GNSS.getFixType();
 
         deque_GNSS_readings.push_back(common_gnss_reading);
+
+        if (ENABLE_DEBUG_FASTPRINT){
+          SERIAL_USB->print(F("DG;"));
+        }
     }
   }
 
@@ -338,25 +364,27 @@ void setup() {
     SERIAL_USB->println(rate);
  
     // wait until we get a fix
-    bool fix_obtained {false};
-    static constexpr unsigned long GNSS_FIX_WAIT_TIMEOUT_MS = 1000 * 60 * 2;
-    unsigned long start_wait_ms = millis();
-    SERIAL_USB->println(F("Waiting for GNSS fix..."));
-    while (millis() - start_wait_ms < GNSS_FIX_WAIT_TIMEOUT_MS){
-      if (log_GNSS.getFixType() >= 3){
-        fix_obtained = true;
-        SERIAL_USB->println(F("GNSS fix acquired."));
-        break;
+    if (ENABLE_GNSS_START){
+      bool fix_obtained {false};
+      static constexpr unsigned long GNSS_FIX_WAIT_TIMEOUT_MS = 1000 * 60 * 2;
+      unsigned long start_wait_ms = millis();
+      SERIAL_USB->println(F("Waiting for GNSS fix..."));
+      while (millis() - start_wait_ms < GNSS_FIX_WAIT_TIMEOUT_MS){
+        if (log_GNSS.getFixType() >= 3){
+          fix_obtained = true;
+          SERIAL_USB->println(F("GNSS fix acquired."));
+          break;
+        }
+        delay(500);
+        wdt.restart();
+        SERIAL_USB->print(F("."));
       }
-      delay(500);
-      wdt.restart();
-      SERIAL_USB->print(F("."));
-    }
 
-    if (!fix_obtained){
-      SERIAL_USB->println();
-      SERIAL_USB->println(F("Failed to obtain GNSS fix in time."));
-      continue;
+      if (!fix_obtained){
+        SERIAL_USB->println();
+        SERIAL_USB->println(F("Failed to obtain GNSS fix in time."));
+        continue;
+      }
     }
 
     SERIAL_USB->println(F("GNSS setup complete."));
@@ -385,9 +413,20 @@ void setup() {
     delay(10);
     wdt.restart();
 
-    AccGyr.ACC_SetOutputDataRate(833.0f);
+    AccGyr.ACC_SetOutputDataRate(ISM330DHCX_ODR_HZ);
     delay(10);
-    AccGyr.GYRO_SetOutputDataRate(833.0f);
+    AccGyr.GYRO_SetOutputDataRate(ISM330DHCX_ODR_HZ);
+    delay(10);
+    wdt.restart();
+
+    float ODR_read;
+    AccGyr.ACC_GetOutputDataRate(&ODR_read);
+    SERIAL_USB->print(F("ISM330DHCX Acc ODR set to: "));
+    SERIAL_USB->println(ODR_read);
+    delay(10);
+    AccGyr.GYRO_GetOutputDataRate(&ODR_read);
+    SERIAL_USB->print(F("ISM330DHCX Gyr ODR set to: "));
+    SERIAL_USB->println(ODR_read);
     delay(10);
     wdt.restart();
 
@@ -397,9 +436,9 @@ void setup() {
     delay(10);
     wdt.restart();
 
-    AccGyr.FIFO_ACC_Set_BDR(833.0f);
+    AccGyr.FIFO_ACC_Set_BDR(ISM330DHCX_ODR_HZ);
     delay(10);
-    AccGyr.FIFO_GYRO_Set_BDR(833.0f);
+    AccGyr.FIFO_GYRO_Set_BDR(ISM330DHCX_ODR_HZ);
     delay(10);
     wdt.restart();
 
@@ -427,11 +466,13 @@ void setup() {
     // Configure timer in REPEAT mode with 3MHz clock
     am_hal_ctimer_config_single(TIMER_NUM, AM_HAL_CTIMER_TIMERA,
                                 (AM_HAL_CTIMER_FN_REPEAT | 
-                                  AM_HAL_CTIMER_HFRC_3MHZ |
+                                  AM_HAL_CTIMER_HFRC_187_5KHZ |
                                   AM_HAL_CTIMER_INT_ENABLE));
     
     // Set the period for the timer
-    uint32_t period = 3000000 / TIMER_FREQ_HZ;
+    static constexpr uint32_t period = 187500 / TIMER_FREQ_HZ;
+    static_assert(period < 0xFFFF, "Timer period too large for 16-bit timer");
+    static_assert(period > 1, "Timer period must be greater than one");
     am_hal_ctimer_period_set(TIMER_NUM, AM_HAL_CTIMER_TIMERA, period, 0);
     
     // Clear any pending interrupts
