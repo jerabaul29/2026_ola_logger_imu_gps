@@ -17,8 +17,8 @@
 #include "etl/deque.h"
 
 
-int32_t acc_value[3];
-int32_t gyr_value[3];
+int16_t acc_value[3];
+int16_t gyr_value[3];
 
 bool acc_available = false;
 bool gyr_available = false;
@@ -53,7 +53,25 @@ constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 25 * 1024 * 1024; // Preallo
 static constexpr char str_start_logging[] = "Log start\n\n";
 static constexpr char str_stop_logging[] = "\n\nLog stop\n";
 
-static constexpr size_t SIZE_DEQUES {3000};
+static constexpr size_t SIZE_DEQUE_IMU {30*( (int)ISM330DHCX_ODR_HZ)};
+static constexpr size_t SIZE_DEQUE_GNSS {30*GNSS_FREQUENCY_HZ};
+static constexpr size_t SIZE_DEQUE_PPS {30*1};
+
+size_t working_deque_size {0};
+size_t max_deque_size_imu {0};
+size_t max_deque_size_gnss {0};
+size_t max_deque_size_pps {0};
+
+static constexpr unsigned long time_between_stats_millis {10 * 1000};
+unsigned long accumulated_sd_time_millis {0};
+unsigned long last_stats_time_millis {0};
+unsigned long working_millis {0};
+volatile unsigned long number_imu_samples_logged {0};
+volatile unsigned long number_gnss_fixes_logged {0};
+volatile unsigned long number_pps_fixes_logged {0};
+float effective_imu_logging_rate_hz {0.0f};
+float effective_gnss_logging_rate_hz {0.0f};
+float effective_pps_logging_rate_hz {0.0f};
 
 struct PPS_fix {
   unsigned long millis_reading;
@@ -73,12 +91,12 @@ struct GNSS_reading {
 
 struct IMU_reading{
   unsigned long millis_reading;
-  int32_t acc_x;
-  int32_t acc_y;
-  int32_t acc_z;
-  int32_t gyr_x;
-  int32_t gyr_y;
-  int32_t gyr_z;
+  int16_t acc_x;
+  int16_t acc_y;
+  int16_t acc_z;
+  int16_t gyr_x;
+  int16_t gyr_y;
+  int16_t gyr_z;
 };
 
 char entry_kind[4];
@@ -88,9 +106,9 @@ PPS_fix common_pps_fix;
 GNSS_reading common_gnss_reading;
 IMU_reading common_imu_reading;
 
-etl::deque<PPS_fix, SIZE_DEQUES> deque_PPS_fixes;
-etl::deque<GNSS_reading, SIZE_DEQUES> deque_GNSS_readings;
-etl::deque<IMU_reading, SIZE_DEQUES> deque_IMU_readings;
+etl::deque<PPS_fix, SIZE_DEQUE_PPS> deque_PPS_fixes;
+etl::deque<GNSS_reading, SIZE_DEQUE_GNSS> deque_GNSS_readings;
+etl::deque<IMU_reading, SIZE_DEQUE_IMU> deque_IMU_readings;
 
 volatile uint32_t ctimer_isr_count {0};
 
@@ -130,13 +148,13 @@ extern "C" void am_ctimer_isr(void)
         switch (tag) {
           // If we have a gyro tag, read the gyro data
           case ISM330DHCX_GYRO_NC_TAG: {
-              AccGyr.FIFO_GYRO_Get_Axes(gyr_value);
+              AccGyr.FIFO_GYRO_Get_AxesRaw(gyr_value);
               gyr_available = true;
               break;
             }
           // If we have an acc tag, read the acc data
           case ISM330DHCX_XL_NC_TAG: {
-              AccGyr.FIFO_ACC_Get_Axes(acc_value);
+              AccGyr.FIFO_ACC_Get_AxesRaw(acc_value);
               acc_available = true;
               break;
             }
@@ -159,6 +177,8 @@ extern "C" void am_ctimer_isr(void)
             deque_IMU_readings.pop_front();
           }
           deque_IMU_readings.push_back(common_imu_reading);
+
+          number_imu_samples_logged++;
 
           acc_available = false;
           gyr_available = false;
@@ -187,6 +207,8 @@ extern "C" void am_ctimer_isr(void)
         }
 
         deque_GNSS_readings.push_back(common_gnss_reading);
+
+        number_gnss_fixes_logged++;
 
         if (ENABLE_DEBUG_FASTPRINT){
           SERIAL_USB->print(F("DG;"));
@@ -450,6 +472,9 @@ void setup() {
     delay(10);
     wdt.restart();
 
+    // TODO
+    // get sensitivity and print it
+
     AccGyr.FIFO_Set_Mode(ISM330DHCX_FIFO_MODE);
     delay(10);
     wdt.restart();
@@ -536,7 +561,16 @@ void setup() {
     SERIAL_USB->println(F("Logging..."));
 
     sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(str_start_logging), sizeof(str_start_logging)-1);
+    // TODO: write header with configuration info
+    // TODO: firmware version info
     wdt.restart();
+
+    last_stats_time_millis = millis();
+    accumulated_sd_time_millis = 0;
+    number_imu_samples_logged = 0;
+    number_gnss_fixes_logged = 0;
+    number_pps_fixes_logged = 0;
+    accumulated_sd_time_millis = 0;
 
     while (board_time_manager.get_posix_timestamp() < posix_timestamp_next_file){
       // log
@@ -549,10 +583,69 @@ void setup() {
       //   - turn on interrupts
       //   - write the local buffer to SD card
 
+      if (millis() - last_stats_time_millis >= time_between_stats_millis){
+        last_stats_time_millis = millis();
+
+        // compute effective logging rates
+        effective_imu_logging_rate_hz = (number_imu_samples_logged * 1000.0f) / (time_between_stats_millis);
+        effective_gnss_logging_rate_hz = (number_gnss_fixes_logged * 1000.0f) / (time_between_stats_millis);
+        effective_pps_logging_rate_hz = (number_pps_fixes_logged * 1000.0f) / (time_between_stats_millis);
+
+        SERIAL_USB->println();
+
+        SERIAL_USB->print(F("Samples logged in last interval: "));
+        SERIAL_USB->print(F("IMU: "));
+        SERIAL_USB->print(number_imu_samples_logged);
+        SERIAL_USB->print(F("; GNSS: "));
+        SERIAL_USB->print(number_gnss_fixes_logged);
+        SERIAL_USB->print(F("; PPS: "));
+        SERIAL_USB->println(number_pps_fixes_logged);
+
+        number_imu_samples_logged = 0;
+        number_gnss_fixes_logged = 0;
+        number_pps_fixes_logged = 0;
+
+        SERIAL_USB->print(F("Max deque sizes reached: "));
+        SERIAL_USB->print(F("IMU: "));
+        SERIAL_USB->print(max_deque_size_imu);
+        SERIAL_USB->print(F(" over "));
+        SERIAL_USB->print(SIZE_DEQUE_IMU);
+        SERIAL_USB->print(F("; GNSS: "));
+        SERIAL_USB->print(max_deque_size_gnss);
+        SERIAL_USB->print(F(" over "));
+        SERIAL_USB->print(SIZE_DEQUE_GNSS);
+        SERIAL_USB->print(F("; PPS: "));
+        SERIAL_USB->print(max_deque_size_pps);
+        SERIAL_USB->print(F(" over "));
+        SERIAL_USB->println(SIZE_DEQUE_PPS);
+
+        max_deque_size_imu = 0;
+        max_deque_size_gnss = 0;
+        max_deque_size_pps = 0;
+ 
+        SERIAL_USB->print(F("Effective logging rates (Hz): "));
+        SERIAL_USB->print(F("IMU (Hz): "));
+        SERIAL_USB->print(effective_imu_logging_rate_hz, 2);
+        SERIAL_USB->print(F("; GNSS (Hz): "));
+        SERIAL_USB->print(effective_gnss_logging_rate_hz, 2);
+        SERIAL_USB->print(F("; PPS (Hz): "));
+        SERIAL_USB->println(effective_pps_logging_rate_hz, 2);
+ 
+        SERIAL_USB->print(F("Accumulated SD time (ms): "));
+        SERIAL_USB->print(accumulated_sd_time_millis);
+        SERIAL_USB->print(F(" ms over "));
+        SERIAL_USB->print(time_between_stats_millis);
+        SERIAL_USB->println(F(" ms interval"));
+
+        accumulated_sd_time_millis = 0;
+
+      }
+
       // with the GNSS PPS deque
       am_hal_interrupt_master_disable();
 
-      if (deque_PPS_fixes.size() > 0){
+      working_deque_size = deque_PPS_fixes.size();
+      if (working_deque_size > 0){
         should_log_data = true;
         common_pps_fix = deque_PPS_fixes.front();
         deque_PPS_fixes.pop_front();
@@ -570,10 +663,15 @@ void setup() {
         should_log_data = false;
       }
 
+      if (working_deque_size > max_deque_size_pps){
+        max_deque_size_pps = working_deque_size;
+      }
+
       // with the GNSS fixes deque
       am_hal_interrupt_master_disable();
 
-      if (deque_GNSS_readings.size() > 0){
+      working_deque_size = deque_GNSS_readings.size();
+      if (working_deque_size > 0){
         should_log_data = true;
         common_gnss_reading = deque_GNSS_readings.front();
         deque_GNSS_readings.pop_front();
@@ -586,15 +684,22 @@ void setup() {
         entry_kind[1] = 'G';
         entry_kind[2] = 'P';
         entry_kind[3] = 'S';
+        working_millis = millis();
         sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(entry_kind), sizeof(entry_kind));
         sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&common_gnss_reading), sizeof(common_gnss_reading));
+        accumulated_sd_time_millis += (millis() - working_millis);
         should_log_data = false;
+      }
+
+      if (working_deque_size > max_deque_size_gnss){
+        max_deque_size_gnss = working_deque_size;
       }
 
       // with the IMU deque
       am_hal_interrupt_master_disable();
 
-      if (deque_IMU_readings.size() > 0){
+      working_deque_size = deque_IMU_readings.size();
+      if (working_deque_size > 0){
         should_log_data = true;
         common_imu_reading = deque_IMU_readings.front();
         deque_IMU_readings.pop_front();
@@ -607,9 +712,15 @@ void setup() {
         entry_kind[1] = 'I';
         entry_kind[2] = 'M';
         entry_kind[3] = 'U';
+        working_millis = millis();
         sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(entry_kind), sizeof(entry_kind));
         sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&common_imu_reading), sizeof(common_imu_reading));
+        accumulated_sd_time_millis += (millis() - working_millis);
         should_log_data = false;
+      }
+
+      if (working_deque_size > max_deque_size_imu){
+        max_deque_size_imu = working_deque_size;
       }
 
       wdt.restart();
