@@ -832,12 +832,12 @@ void setup() {
     SERIAL_USB->println(F("Time to start new log file"));
 
     uint64_t file_size = sd_card_manager.get_file()->size();
-    SERIAL_USB->print(F("Final log file size (Mbytes): "));
-    SERIAL_USB->println((uint32_t) (file_size / (1024 * 1024)));
+    SERIAL_USB->print(F("Final log file size (KBytes): "));
+    SERIAL_USB->println((uint32_t) (file_size / 1024));
 
     uint64_t available_size = sd_card_manager.get_file()->available();
-    SERIAL_USB->print(F("Final log file available size remaining (Mbytes): "));
-    SERIAL_USB->println((uint32_t) (available_size / (1024 * 1024)));
+    SERIAL_USB->print(F("Final log file available size remaining (KBytes): "));
+    SERIAL_USB->println((uint32_t) (available_size / 1024));
     
     wdt.restart();
 
