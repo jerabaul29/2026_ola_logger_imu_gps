@@ -49,6 +49,8 @@ static constexpr bool ENABLE_DEBUG_FASTPRINT = false;
 
 TwoWire * I2C_QWIIC = &Wire1;
 
+static constexpr int PIN_LOG_PPS = 11; // Pin to log PPS signal from GNSS
+
 ISM330DHCXSensor AccGyr(I2C_QWIIC, ISM330DHCX_I2C_ADD_L);
 
 static constexpr uint32_t seconds_in_15_minutes = 15 * 60;
@@ -225,7 +227,33 @@ extern "C" void am_ctimer_isr(void)
   }
 }
 
-// TODO: PPS ISR handler
+volatile unsigned long last_pps_millis {0};
+
+void isr_PPS() {
+  unsigned long current_millis = millis();
+
+  if (current_millis - last_pps_millis < 500){
+    // debounce: ignore if within 500 ms of last PPS
+    // as this may mean we have a bouncing signal
+    last_pps_millis = current_millis;
+    return;
+  }
+
+  last_pps_millis = current_millis;
+
+  common_pps_fix.millis_reading = current_millis;
+
+  if (deque_PPS_fixes.full()){
+    deque_PPS_fixes.pop_front();
+  }
+  deque_PPS_fixes.push_back(common_pps_fix);
+
+  number_pps_fixes_logged++;
+
+  if (ENABLE_DEBUG_FASTPRINT){
+    SERIAL_USB->print(F("DP;"));
+  }
+}
 
 void setup() {
   /////////////////////////////////////////////////////////////////////////////////
@@ -424,6 +452,10 @@ void setup() {
 
     SERIAL_USB->println(F("GNSS setup complete."));
     wdt.restart();
+
+    ////////////////////////////////////////////////////
+    pinMode(PIN_LOG_PPS, INPUT_PULLUP);
+    attachInterrupt(PIN_LOG_PPS, isr_PPS, RISING);
 
     ////////////////////////////////////////////////////
     // start and set up ISM330DHCX
