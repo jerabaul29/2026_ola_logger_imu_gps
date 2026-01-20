@@ -59,6 +59,10 @@ In addition we provide the .bin file, that has been compiled in advance and can 
 
 The data on the SD card are stored largely in binary format for efficiency (otherwise, the bandwidth to be written to SD card would be too large, and the SD card would also fill too fast). See the decoder in the adjacent folder to extract the data from the SD card.
 
+## Choice of SD card
+
+SD cards come in many different qualities, and speed and power consumption can vary a lot. Choose a "reasonably good" one, otherwise power consumption may be bad and / or writing speed too slow compared to the data stream. Choosing a good SD card is a dark art, you may need to test with different models!
+
 ## Disclaimers
 
 I wanted to make this into a "clean" project, but I ended up time constrained, so this is a mix of old libs, new libs, custom libs, and various stuff I had from other projects around the years - this is a bit messy!
