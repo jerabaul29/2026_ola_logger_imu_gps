@@ -45,9 +45,11 @@ The amount of data generated is 1 file every 15 minutes, typical file size aroun
 
 The red LED may blink during setup.
 
-The blue LED should blink rapidly during logging (it is on while busy writing to SD, off when no ongoing SD writing).
+The blue LED should blink rapidly / flicker during logging (it is on while busy writing to SD, off when no ongoing SD writing).
 
 The PPS LED should blink at 1Hz when GPS signal is available.
+
+The logger only logs if it gets GPS information - if no GPS information within 5 minutes, it will go to sleep for 1 hour to save battery before trying again. Press the reset button if you want to force restart the firmware.
 
 ## Compiling / Uploading
 
