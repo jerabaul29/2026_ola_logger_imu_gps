@@ -24,11 +24,11 @@ bool acc_available = false;
 bool gyr_available = false;
 
 SFE_UBLOX_GNSS log_GNSS;
-static constexpr uint32_t GNSS_FREQUENCY_HZ = 1;
-// static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
+// static constexpr uint32_t GNSS_FREQUENCY_HZ = 1;
+static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
 
-static constexpr float ISM330DHCX_ODR_HZ = 12.5f;
-// static constexpr float ISM330DHCX_ODR_HZ = 104.0f;
+// static constexpr float ISM330DHCX_ODR_HZ = 12.5f;
+static constexpr float ISM330DHCX_ODR_HZ = 417.0f;
 
 // Timer configuration
 static constexpr int TIMER_NUM = 2;
@@ -53,7 +53,7 @@ constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 25 * 1024 * 1024; // Preallo
 static constexpr char str_start_logging[] = "Log start\n\n";
 static constexpr char str_stop_logging[] = "\n\nLog stop\n";
 
-static constexpr size_t SIZE_DEQUES {2048};
+static constexpr size_t SIZE_DEQUES {3000};
 
 struct PPS_fix {
   unsigned long millis_reading;
@@ -155,6 +155,9 @@ extern "C" void am_ctimer_isr(void)
           common_imu_reading.gyr_y = gyr_value[1];
           common_imu_reading.gyr_z = gyr_value[2];
 
+          if (deque_IMU_readings.full()){
+            deque_IMU_readings.pop_front();
+          }
           deque_IMU_readings.push_back(common_imu_reading);
 
           acc_available = false;
@@ -179,6 +182,10 @@ extern "C" void am_ctimer_isr(void)
         common_gnss_reading.NED_vel_down = log_GNSS.getNedDownVel();
         common_gnss_reading.fix_type = log_GNSS.getFixType();
 
+        if (deque_GNSS_readings.full()){
+          deque_GNSS_readings.pop_front();
+        }
+
         deque_GNSS_readings.push_back(common_gnss_reading);
 
         if (ENABLE_DEBUG_FASTPRINT){
@@ -196,7 +203,8 @@ extern "C" void am_ctimer_isr(void)
 void setup() {
   /////////////////////////////////////////////////////////////////////////////////
   // Initialize watchdog timer
-  wdt.configure(WDT_1HZ, 32, 32);
+  // Set WDT to 1 Hz, interrupt at 128 ticks, reset at 128 ticks; slow as pre allocate can take quite a while it seems
+  wdt.configure(WDT_1HZ, 128, 128);
   wdt.start();
 
   if (ENABLE_BLINK_PWR_LED){
@@ -226,6 +234,8 @@ void setup() {
   SERIAL_USB->println();
 
   boot_counter_instance.increment_boot_number();
+  SERIAL_USB->print(F("Boot count: "));
+  SERIAL_USB->println(boot_counter_instance.get_boot_number());
   delay(100);
   wdt.restart();
 
@@ -234,8 +244,6 @@ void setup() {
   // If the user presses 'y' within 5 seconds, reset the boot count
   // Otherwise, keep the current boot count
   if (ENABLE_BOOT_COUNTER){
-    SERIAL_USB->print(F("Boot count: "));
-    SERIAL_USB->println(boot_counter_instance.get_boot_number());
     SERIAL_USB->println(F("Press y to reset boot count... "));
     wdt.restart();
     unsigned long startTime = millis();
@@ -506,6 +514,7 @@ void setup() {
 
   while (true){
     // create a new file
+    SERIAL_USB->println();
     SERIAL_USB->println(F("Preparing to start new log file..."));
 
     if (sd_card_manager.preallocate_and_open_file(PREALLOCATE_LOGFILE_SIZE_BYTES)) {
