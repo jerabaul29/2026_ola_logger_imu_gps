@@ -43,8 +43,8 @@ static constexpr uint32_t TIMER_FREQ_HZ = static_cast<uint32_t>(2 * ISM330DHCX_O
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
 static constexpr bool ENABLE_BLINK_PWR_LED = false;          ///< Enable power LED blinking on startup
-static constexpr bool ENABLE_BOOT_COUNTER = false;          ///< Enable boot counter functionality
-static constexpr bool ENABLE_GNSS_START = false;                    ///< Enable GNSS module
+static constexpr bool ENABLE_BOOT_COUNTER = true;          ///< Enable boot counter functionality
+static constexpr bool ENABLE_GNSS_START = true;                    ///< Enable GNSS module
 static constexpr bool ENABLE_DEBUG_FASTPRINT = false;
 
 TwoWire * I2C_QWIIC = &Wire1;
@@ -55,7 +55,7 @@ ISM330DHCXSensor AccGyr(I2C_QWIIC, ISM330DHCX_I2C_ADD_L);
 
 static constexpr uint32_t seconds_in_15_minutes = 15 * 60;
 
-constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 25 * 1024 * 1024; // Preallocate a file large enough for logging
+constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 10 * 1024 * 1024; // Preallocate a file large enough for logging
 
 static constexpr char str_start_logging[] = "Log start OLA ISM330DHCX SAM-M10Q logger\n\n";
 static constexpr char str_stop_logging[] = "\n\nLog stop OLA ISM330DHCX SAM-M10Q logger\n";
