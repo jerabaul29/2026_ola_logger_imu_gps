@@ -197,7 +197,7 @@ extern "C" void am_ctimer_isr(void)
     }
 
     // if time to read GNSS data, do it and store in deque
-    if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ) == 0){
+    if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ / 2) == 0){
       // check if we have a new GNSS reading; if yes, push fix to deque
       if (log_GNSS.getPVT()){
         common_gnss_reading.millis_reading = millis();
@@ -454,6 +454,10 @@ void setup() {
     wdt.restart();
 
     ////////////////////////////////////////////////////
+    // I would prefer a PULLDOWN but for some reason it does not work
+    // this should not matter: PULLUP should protect us anyways if floating,
+    // and the PULLUP is not harmful as it is weak enough that this gets fully driven
+    // by the GNSS PPS output
     pinMode(PIN_LOG_PPS, INPUT_PULLUP);
     attachInterrupt(PIN_LOG_PPS, isr_PPS, RISING);
 
