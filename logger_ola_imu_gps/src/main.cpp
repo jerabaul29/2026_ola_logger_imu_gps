@@ -68,6 +68,7 @@ size_t working_deque_size {0};
 size_t max_deque_size_imu {0};
 size_t max_deque_size_gnss {0};
 size_t max_deque_size_pps {0};
+volatile size_t max_fifo_size_ism {0};
 
 static constexpr unsigned long time_between_stats_millis {10 * 1000};
 unsigned long accumulated_sd_time_millis {0};
@@ -142,6 +143,9 @@ extern "C" void am_ctimer_isr(void)
     // read IMU data and store in deque as many as fifo entries
     uint16_t num_samples_available = 0;
     AccGyr.FIFO_Get_Num_Samples(&num_samples_available);
+    if (num_samples_available > max_fifo_size_ism){
+      max_fifo_size_ism = num_samples_available;
+    }
     if (num_samples_available > 1){
       for (uint16_t i=0; i<num_samples_available; i++){
         uint8_t tag;
@@ -713,6 +717,10 @@ void setup() {
         SERIAL_USB->print(max_deque_size_imu);
         SERIAL_USB->print(F(" over "));
         SERIAL_USB->print(SIZE_DEQUE_IMU);
+        SERIAL_USB->print(F("; ISM FIFO: "));
+        SERIAL_USB->print(max_fifo_size_ism);
+        SERIAL_USB->print(F(" over "));
+        SERIAL_USB->print(F("512"));  // determined from test with similar setup
         SERIAL_USB->print(F("; GNSS: "));
         SERIAL_USB->print(max_deque_size_gnss);
         SERIAL_USB->print(F(" over "));
@@ -725,6 +733,7 @@ void setup() {
         max_deque_size_imu = 0;
         max_deque_size_gnss = 0;
         max_deque_size_pps = 0;
+        max_fifo_size_ism = 0;
  
         SERIAL_USB->print(F("Effective logging rates (Hz): "));
         SERIAL_USB->print(F("IMU (Hz): "));
