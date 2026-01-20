@@ -74,29 +74,51 @@ I wanted to make this into a "clean" project, but I ended up time constrained, s
 When running the logger while connect to USB, some level of information / log is provided over USB (serial baudrate 1 million: 1000000). For example:
 
 ```
+millis(): 1539116; seconds since boot: 1539
+Samples logged in last interval: IMU: 4443; GNSS: 95; PPS: 8
+Max deque sizes reached: IMU: 21 over 12510; ISM FIFO: 12 over 512; GNSS: 1 over 300; PPS: 1 over 30
+Effective logging rates (Hz): IMU (Hz): 444.20; GNSS (Hz): 9.50; PPS (Hz): 0.80
+Accumulated SD time (ms): 4810 ms over 10000 ms interval
+
+millis(): 1549127; seconds since boot: 1549
+Samples logged in last interval: IMU: 4432; GNSS: 96; PPS: 9
+Max deque sizes reached: IMU: 20 over 12510; ISM FIFO: 10 over 512; GNSS: 1 over 300; PPS: 1 over 30
+Effective logging rates (Hz): IMU (Hz): 443.10; GNSS (Hz): 9.60; PPS (Hz): 0.90
+Accumulated SD time (ms): 4822 ms over 10000 ms interval
+
+Time to start new log file
+Final log file size (KBytes): 10240
+Final log file available size remaining (KBytes): 2147
+Syncing and closing file...
+File closed
+
+Preparing to start new log file...
+Opening file: DATA_BOOT_0058_TIME_20260120T220000.dat
+File opened successfully
+Preallocating 10485760 bytes...
+File preallocated successfully
+Log file opened and preallocated successfully.
+Current posix timestamp: 1768946402
+Next log file posix timestamp: 1768947300
+Logging...
+
 Log start OLA ISM330DHCX SAM-M10Q logger
 
-Firmware commit ID: d32aed8487c85fe59b18bd2c86d3a805d80059b0
+Firmware commit ID: f46f8cf748345997a2077f094a2bc248dbabcaa5
 ISM330DHCX Acc sensitivity (mg/LSB): 0.061000
 ISM330DHCX Gyr sensitivity (mdps/LSB): 4.375000
 ISM330DHCX ODR (Hz): 417.00
 GNSS update rate (Hz): 10
 
-millis(): 33325; seconds since boot: 33
-Samples logged in last interval: IMU: 4433; GNSS: 89; PPS: 0
-Max deque sizes reached: IMU: 9647 over 12510; GNSS: 196 over 300; PPS: 0 over 30
-Effective logging rates (Hz): IMU (Hz): 443.20; GNSS (Hz): 8.90; PPS (Hz): 0.00
-Accumulated SD time (ms): 9630 ms over 10000 ms interval
+millis(): 1563287; seconds since boot: 1563
+Samples logged in last interval: IMU: 4433; GNSS: 93; PPS: 10
+Max deque sizes reached: IMU: 1255 over 12510; ISM FIFO: 10 over 512; GNSS: 27 over 300; PPS: 2 over 30
+Effective logging rates (Hz): IMU (Hz): 443.20; GNSS (Hz): 9.30; PPS (Hz): 1.00
+Accumulated SD time (ms): 6406 ms over 10000 ms interval
 
-millis(): 43328; seconds since boot: 43
-Samples logged in last interval: IMU: 4432; GNSS: 92; PPS: 0
-Max deque sizes reached: IMU: 5612 over 12510; GNSS: 1 over 300; PPS: 0 over 30
-Effective logging rates (Hz): IMU (Hz): 443.10; GNSS (Hz): 9.20; PPS (Hz): 0.00
-Accumulated SD time (ms): 9586 ms over 10000 ms interval
-
-millis(): 53328; seconds since boot: 53
-Samples logged in last interval: IMU: 4431; GNSS: 91; PPS: 0
-Max deque sizes reached: IMU: 1295 over 12510; GNSS: 1 over 300; PPS: 0 over 30
-Effective logging rates (Hz): IMU (Hz): 443.00; GNSS (Hz): 9.10; PPS (Hz): 0.00
-Accumulated SD time (ms): 6321 ms over 10000 ms interval
+millis(): 1573308; seconds since boot: 1573
+Samples logged in last interval: IMU: 4437; GNSS: 96; PPS: 10
+Max deque sizes reached: IMU: 19 over 12510; ISM FIFO: 10 over 512; GNSS: 1 over 300; PPS: 1 over 30
+Effective logging rates (Hz): IMU (Hz): 443.50; GNSS (Hz): 9.60; PPS (Hz): 1.00
+Accumulated SD time (ms): 4885 ms over 10000 ms interval
 ```
