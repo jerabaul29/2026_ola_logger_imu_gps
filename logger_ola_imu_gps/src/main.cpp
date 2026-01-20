@@ -20,8 +20,13 @@
 int16_t acc_value[3];
 int16_t gyr_value[3];
 
+float acc_sensitivity = 0.0f;
+float gyr_sensitivity = 0.0f;
+
 bool acc_available = false;
 bool gyr_available = false;
+
+char working_buffer[1024];
 
 SFE_UBLOX_GNSS log_GNSS;
 // static constexpr uint32_t GNSS_FREQUENCY_HZ = 1;
@@ -50,8 +55,8 @@ static constexpr uint32_t seconds_in_15_minutes = 15 * 60;
 
 constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 25 * 1024 * 1024; // Preallocate a file large enough for logging
 
-static constexpr char str_start_logging[] = "Log start\n\n";
-static constexpr char str_stop_logging[] = "\n\nLog stop\n";
+static constexpr char str_start_logging[] = "Log start OLA ISM330DHCX SAM-M10Q logger\n\n";
+static constexpr char str_stop_logging[] = "\n\nLog stop OLA ISM330DHCX SAM-M10Q logger\n";
 
 static constexpr size_t SIZE_DEQUE_IMU {30*( (int)ISM330DHCX_ODR_HZ)};
 static constexpr size_t SIZE_DEQUE_GNSS {30*GNSS_FREQUENCY_HZ};
@@ -472,8 +477,16 @@ void setup() {
     delay(10);
     wdt.restart();
 
-    // TODO
     // get sensitivity and print it
+    AccGyr.ACC_GetSensitivity(&acc_sensitivity);
+    SERIAL_USB->print(F("ISM330DHCX Acc sensitivity (mg/LSB): "));
+    SERIAL_USB->println(acc_sensitivity, 6);
+    delay(10);
+    AccGyr.GYRO_GetSensitivity(&gyr_sensitivity);
+    SERIAL_USB->print(F("ISM330DHCX Gyr sensitivity (mdps/LSB): "));
+    SERIAL_USB->println(gyr_sensitivity, 6);
+    delay(10);
+    wdt.restart();
 
     AccGyr.FIFO_Set_Mode(ISM330DHCX_FIFO_MODE);
     delay(10);
@@ -520,6 +533,7 @@ void setup() {
     // Start the timer
     am_hal_ctimer_start(TIMER_NUM, AM_HAL_CTIMER_TIMERA);
     Serial.println(F("Timer started!"));
+    wdt.restart();
 
     break;
   }
@@ -559,10 +573,58 @@ void setup() {
     SERIAL_USB->println(posix_timestamp_next_file);
     wdt.restart();
     SERIAL_USB->println(F("Logging..."));
+    SERIAL_USB->println();
 
+    SERIAL_USB->print(str_start_logging);
     sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(str_start_logging), sizeof(str_start_logging)-1);
-    // TODO: write header with configuration info
-    // TODO: firmware version info
+
+    // write header with configuration info
+
+    // firmware version info: commit ID used
+    for (size_t i=0; i<sizeof(working_buffer); i++){
+      working_buffer[i] = '\0';
+    }
+    snprintf(working_buffer, sizeof(working_buffer),
+             "Firmware commit ID: %s\n", commit_id);
+    SERIAL_USB->print(working_buffer);
+    sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(working_buffer), strlen(working_buffer));
+
+    // sensitivity IMU ACC
+    for (size_t i=0; i<sizeof(working_buffer); i++){
+      working_buffer[i] = '\0';
+    }
+    snprintf(working_buffer, sizeof(working_buffer),
+             "ISM330DHCX Acc sensitivity (mg/LSB): %.6f\n", acc_sensitivity);
+    SERIAL_USB->print(working_buffer);
+    sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(working_buffer), strlen(working_buffer));
+
+    // sensitivity IMU GYR
+    for (size_t i=0; i<sizeof(working_buffer); i++){
+      working_buffer[i] = '\0';
+    }
+    snprintf(working_buffer, sizeof(working_buffer),
+             "ISM330DHCX Gyr sensitivity (mdps/LSB): %.6f\n", gyr_sensitivity);
+    SERIAL_USB->print(working_buffer);
+    sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(working_buffer), strlen(working_buffer));
+
+    // sample rate IMU
+    for (size_t i=0; i<sizeof(working_buffer); i++){
+      working_buffer[i] = '\0';
+    }
+    snprintf(working_buffer, sizeof(working_buffer),
+             "ISM330DHCX ODR (Hz): %.2f\n", ISM330DHCX_ODR_HZ);
+    SERIAL_USB->print(working_buffer);
+    sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(working_buffer), strlen(working_buffer));
+
+    // sample rate GNSS
+    for (size_t i=0; i<sizeof(working_buffer); i++){
+      working_buffer[i] = '\0';
+    }
+    snprintf(working_buffer, sizeof(working_buffer),
+             "GNSS update rate (Hz): %d\n", GNSS_FREQUENCY_HZ);
+    SERIAL_USB->print(working_buffer);
+    sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(working_buffer), strlen(working_buffer));
+
     wdt.restart();
 
     last_stats_time_millis = millis();
@@ -592,6 +654,11 @@ void setup() {
         effective_pps_logging_rate_hz = (number_pps_fixes_logged * 1000.0f) / (time_between_stats_millis);
 
         SERIAL_USB->println();
+
+        SERIAL_USB->print(F("millis(): "));
+        SERIAL_USB->print(millis());
+        SERIAL_USB->print(F("; seconds since boot: "));
+        SERIAL_USB->println(millis() / 1000);
 
         SERIAL_USB->print(F("Samples logged in last interval: "));
         SERIAL_USB->print(F("IMU: "));
@@ -741,6 +808,9 @@ void setup() {
 
   SERIAL_USB->println(F("Stopping logging due to error..."));
   sd_card_manager.close_and_sync_file();
+  uint64_t file_size = sd_card_manager.get_file()->size();
+  SERIAL_USB->print(F("Final log file size (Mbytes): "));
+  SERIAL_USB->println((uint32_t) (file_size / (1024 * 1024)));
   delay(1000);
   sd_card_manager.stop();
 
