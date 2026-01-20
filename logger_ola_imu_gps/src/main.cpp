@@ -828,9 +828,22 @@ void setup() {
     sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(str_stop_logging), sizeof(str_stop_logging)-1);
     wdt.restart();
     // time to close the file and start logging a new one
+    SERIAL_USB->println();
     SERIAL_USB->println(F("Time to start new log file"));
+
+    uint64_t file_size = sd_card_manager.get_file()->size();
+    SERIAL_USB->print(F("Final log file size (Mbytes): "));
+    SERIAL_USB->println((uint32_t) (file_size / (1024 * 1024)));
+
+    uint64_t available_size = sd_card_manager.get_file()->available();
+    SERIAL_USB->print(F("Final log file available size remaining (Mbytes): "));
+    SERIAL_USB->println((uint32_t) (available_size / (1024 * 1024)));
+    
     wdt.restart();
+
     sd_card_manager.close_and_sync_file();
+    wdt.restart();
+
     delay(10);
   }
 
@@ -840,11 +853,9 @@ void setup() {
 
   SERIAL_USB->println(F("Stopping logging due to error..."));
   sd_card_manager.close_and_sync_file();
-  uint64_t file_size = sd_card_manager.get_file()->size();
-  SERIAL_USB->print(F("Final log file size (Mbytes): "));
-  SERIAL_USB->println((uint32_t) (file_size / (1024 * 1024)));
-  delay(1000);
+  delay(5000);
   sd_card_manager.stop();
+  wdt.restart();
 
   SERIAL_USB->println(F("Entering infinite loop to trigger watchdog reset..."));
 
