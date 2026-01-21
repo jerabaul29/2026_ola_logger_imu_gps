@@ -50,3 +50,11 @@ Everything for parsing etc is written in python
 - use individual functions to parse each raw data kind (i.e. parse 1 line of raw data)
 - write a single function to parse a single file and write the npy to disk
 - when dumping to disk, there should be an individual .npy file for each datakind, containing a numpy array of dataclass objects matching the object kind
+
+## Misc
+
+- at the end of each update to the code, go through the files and check that the documentation and readme are up to date
+- when writing code, check that all guidelines present here are followed
+- at the end of each code update, do a small review of the code, look for good possibilities for refactoring and improvement, and if there are clear improvement possibilities, work on implementing them
+- at the end of each code update, make sure everything works - tests, spell check, linting, etc
+
