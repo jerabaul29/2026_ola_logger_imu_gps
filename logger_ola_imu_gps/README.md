@@ -19,7 +19,7 @@ In addition, users may want to design a robust power supply, such as:
 
 In order to reach lowest possible power consumption, users may consider to cut the power LED pads on the back of boards that support it (such as the Sparkfun GPS and IMU breakout boards).
 
-Use a good quality SD card to enable power efficient and fast logging. The SD card needs to be formatted as FAT before use.
+Use a good quality SD card to enable power efficient and fast logging. The SD card needs to be formatted as FAT before use. When formatting the card, use the "overwrite" option to make sure it is filled with `\0` bytes, since the files are pre-allocated so this may make it easier to find file end in case the full file length is not used.
 
 ## Notes about the design
 
