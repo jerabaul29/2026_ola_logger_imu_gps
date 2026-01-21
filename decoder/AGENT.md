@@ -32,7 +32,7 @@ Everything for parsing etc is written in python
 - use established packages:
   - struct and struct.unpack for raw data handling (reading int16_t, long unsigned int, etc; long unsigned int is 32 bits)
   - dataclasses to model C/C++ structs
-  - numpy for the arrays and dump the data as npy; use the type "object" for the arrays to contain the dataclasses objects
+  - numpy for the arrays and dump the data as npy; use the type "object" for the arrays to contain the dataclasses objects; enrich the dataclass with "scaled" values for the IMU (float scaled values by the sensors sensitivity in addition to raw int16_t readings)
   - no more package imports needed
 
 ## Code setup and environment management: mamba
