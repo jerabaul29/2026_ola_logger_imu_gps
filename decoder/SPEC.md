@@ -1,0 +1,112 @@
+# Specification of the data format on the SD card
+
+The information below is from the PlatformIO C++ project in the sibling directory: see `../logger_ola_imu_gps` for more details about the code running on the logger. The data files are pre allocated to be a total of `10 * 1024 * 1024` bytes, and may contain empty data or trash data at the end of the file.
+
+Filename format: this is generated in C++:
+
+```cpp
+    snprintf(filename_buffer, sizeof(filename_buffer),
+             "DATA_BOOT_%04u_TIME_%02u%02u%02uT%02u%02u%02u.dat",
+             boot_count,
+             common_working_struct_YMDHMS.year,
+             common_working_struct_YMDHMS.month,
+             common_working_struct_YMDHMS.day,
+             common_working_struct_YMDHMS.hour,
+             common_working_struct_YMDHMS.minute,
+             common_working_struct_YMDHMS.second);
+```
+
+Data file format:
+
+- header: (the actual string and numerical values may change depending on compile, options etc): taken from an example file:
+
+```
+Log start OLA ISM330DHCX SAM-M10Q logger
+
+Firmware commit ID: 391b428a3e869543ebd2caf1626f845730858f8b
+ISM330DHCX Acc sensitivity (mg/LSB): 0.061000
+ISM330DHCX Gyr sensitivity (mdps/LSB): 4.375000
+ISM330DHCX ODR (Hz): 417.00
+GNSS update rate (Hz): 10
+```
+
+- actual data entries format:
+    - 1 entry per line: each line is a single record of data
+    - first 4 chars that indicate the kind of the line are set in C++ as:
+
+      - for the PPS entries:
+
+```cpp
+        entry_kind[0] = '\n';
+        entry_kind[1] = 'P';
+        entry_kind[2] = 'P';
+        entry_kind[3] = 'S';
+```
+
+      - for the GPS entries:
+
+```cpp
+        entry_kind[0] = '\n';
+        entry_kind[1] = 'G';
+        entry_kind[2] = 'P';
+        entry_kind[3] = 'S';
+```
+
+      - for the IMU entries:
+
+```cpp
+        entry_kind[0] = '\n';
+        entry_kind[1] = 'I';
+        entry_kind[2] = 'M';
+        entry_kind[3] = 'U';
+```
+
+    - then a raw dump of the C++ respective struct (unsigned long is 32 bits) follows as (in all the following, millis_reading is the microcontroller arduino core `millis()` output):
+
+      - for the PPS entries:
+
+```cpp
+struct PPS_fix {
+  unsigned long millis_reading;
+};
+```
+
+      - for the GNSS entries:
+
+```cpp
+struct GNSS_reading {
+  unsigned long millis_reading;
+  int32_t latitude;
+  int32_t longitude;
+  uint32_t posix_timestamp;
+  uint32_t microseconds;
+  int32_t NED_vel_north;
+  int32_t NED_vel_east;
+  int32_t NED_vel_down;
+  uint8_t fix_type;
+};
+```
+
+      - for the IMU entries:
+
+```cpp
+struct IMU_reading{
+  unsigned long millis_reading;
+  int16_t acc_x;
+  int16_t acc_y;
+  int16_t acc_z;
+  int16_t gyr_x;
+  int16_t gyr_y;
+  int16_t gyr_z;
+};  
+```
+
+For the IMU entries, the scaling from the `int16_t` to actual float values are to be performed using the sensitivity values provided in the header.
+
+- Footer:
+
+```
+\n\nLog stop OLA ISM330DHCX SAM-M10Q logger\n
+```
+
+- Finally the file is pre-allocated for speed, so the rest of the file after the footer may be either all `\0` or even garbage, depending on how the SD card had been formatted or not beforehands.
