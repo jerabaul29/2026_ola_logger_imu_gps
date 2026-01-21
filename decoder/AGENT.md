@@ -1,5 +1,7 @@
 # Python decoder for the raw data files
 
+## Overview
+
 - the goal is to decode the raw data files generated from the OLA logger using python code
 - see the spec in the `./SPEC.md` file; make sure to read it
 - the OLA (OpenLogArtemis) logger runs a C/C++ bare metal firmware are logs to SD card
