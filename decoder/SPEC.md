@@ -37,6 +37,13 @@ ISM330DHCX ODR (Hz): 417.00
 GNSS update rate (Hz): 10
 ```
 
+The header contains the scaling from int value to physical units for the accelerometer and the gyroscope. For the Acc (accelerometer), mg means "milli-g", g is the acceleration of gravity. For the Gyr (gyroscope), the mdps means "milli degree per second".
+
+For the GPS, the units are as follow:
+  - latitude and longitude: these are the int rounding of "degree decimal * 10^7"
+  - for the vel (velocity) variables: these are the in mmps (millimeters per second) per LSB
+  - the posix_timestamp field has unit seconds, and it can be combined with the microseconds value to generate a timestamp with microsecond accuracy
+
 - actual data entries format:
     - 1 entry per line: each line is a single record of data
     - first 4 chars that indicate the kind of the line are set in C++ as:

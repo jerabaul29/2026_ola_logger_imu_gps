@@ -2,6 +2,7 @@
 
 import struct
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,12 @@ class GNSSReading:
     ned_vel_east: int
     ned_vel_down: int
     fix_type: int
+    latitude_dd: float
+    longitude_dd: float
+    ned_vel_north_mmps: int
+    ned_vel_east_mmps: int
+    ned_vel_down_mmps: int
+    datetime_utc: datetime
 
 
 @dataclass
@@ -135,7 +142,7 @@ def parse_gnss_entry(data: bytes) -> GNSSReading:
         data: Raw binary data for GNSS entry
 
     Returns:
-        GNSSReading object
+        GNSSReading object with raw and physical unit values
 
     Raises:
         AssertionError: If data size is incorrect
@@ -145,16 +152,45 @@ def parse_gnss_entry(data: bytes) -> GNSSReading:
         f"got {len(data)} bytes"
     )
     values = struct.unpack("<IiiiIiiiB", data[:33])
+
+    millis_reading = values[0]
+    latitude = values[1]
+    longitude = values[2]
+    posix_timestamp = values[3]
+    microseconds = values[4]
+    ned_vel_north = values[5]
+    ned_vel_east = values[6]
+    ned_vel_down = values[7]
+    fix_type = values[8]
+
+    # Convert to physical units
+    latitude_dd = latitude / 1e7
+    longitude_dd = longitude / 1e7
+    ned_vel_north_mmps = ned_vel_north
+    ned_vel_east_mmps = ned_vel_east
+    ned_vel_down_mmps = ned_vel_down
+
+    # Create datetime with microsecond accuracy
+    datetime_utc = datetime.fromtimestamp(
+        posix_timestamp + microseconds / 1e6, tz=timezone.utc
+    )
+
     return GNSSReading(
-        millis_reading=values[0],
-        latitude=values[1],
-        longitude=values[2],
-        posix_timestamp=values[3],
-        microseconds=values[4],
-        ned_vel_north=values[5],
-        ned_vel_east=values[6],
-        ned_vel_down=values[7],
-        fix_type=values[8],
+        millis_reading=millis_reading,
+        latitude=latitude,
+        longitude=longitude,
+        posix_timestamp=posix_timestamp,
+        microseconds=microseconds,
+        ned_vel_north=ned_vel_north,
+        ned_vel_east=ned_vel_east,
+        ned_vel_down=ned_vel_down,
+        fix_type=fix_type,
+        latitude_dd=latitude_dd,
+        longitude_dd=longitude_dd,
+        ned_vel_north_mmps=ned_vel_north_mmps,
+        ned_vel_east_mmps=ned_vel_east_mmps,
+        ned_vel_down_mmps=ned_vel_down_mmps,
+        datetime_utc=datetime_utc,
     )
 
 
