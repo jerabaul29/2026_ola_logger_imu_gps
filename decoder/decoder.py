@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 from loguru import logger
+from scipy import stats
 
 # Magic constants
 HEADER_LINES_TO_READ = 10
@@ -29,6 +30,8 @@ class PPSFix:
     """PPS fix data structure."""
 
     millis_reading: int
+    utc_timestamp_from_pps_regression: float | None = None
+    datetime_timestamp_from_pps_regression: datetime | None = None
 
 
 @dataclass
@@ -50,6 +53,8 @@ class GNSSReading:
     ned_vel_east_mmps: int
     ned_vel_down_mmps: int
     datetime_utc: datetime
+    utc_timestamp_from_pps_regression: float | None = None
+    datetime_timestamp_from_pps_regression: datetime | None = None
 
 
 @dataclass
@@ -69,6 +74,8 @@ class IMUReading:
     gyr_x_mdps: float
     gyr_y_mdps: float
     gyr_z_mdps: float
+    utc_timestamp_from_pps_regression: float | None = None
+    datetime_timestamp_from_pps_regression: datetime | None = None
 
 
 def parse_header(file_path: Path) -> dict[str, Any]:
@@ -113,6 +120,175 @@ def parse_header(file_path: Path) -> dict[str, Any]:
 
     logger.info(f"Parsed header: {header_info}")
     return header_info
+
+
+def unwrap_millis(millis_list: list[int]) -> list[int]:
+    """Unwrap uint32_t millis timestamps to handle wrapping.
+
+    Since millis() uses uint32_t on the OLA MCU, we need to handle wrapping
+    at 2**32. If a jump of more than 2**32/2 is detected going backwards,
+    we add 2**32 to all following values.
+
+    Args:
+        millis_list: List of millis timestamps (may have wrapping)
+
+    Returns:
+        List of unwrapped millis timestamps
+    """
+    if not millis_list:
+        return []
+
+    UINT32_MAX = 2**32
+    HALF_UINT32 = UINT32_MAX // 2
+
+    unwrapped = [millis_list[0]]
+    offset = 0
+
+    for i in range(1, len(millis_list)):
+        current = millis_list[i]
+        prev = millis_list[i - 1]
+
+        # Detect wrap: if current is much less than prev (jumped backwards)
+        if prev - current > HALF_UINT32:
+            offset += UINT32_MAX
+
+        unwrapped.append(current + offset)
+
+    return unwrapped
+
+
+def compute_pps_regression(
+    pps_list: list[PPSFix],
+    gnss_list: list[GNSSReading],
+) -> tuple[float, float]:
+    """Compute linear regression from PPS millis to UTC timestamps.
+
+    This function:
+    1. Unwraps millis timestamps for both PPS and GNSS data
+    2. Matches each PPS timestamp with the closest GNSS timestamp
+    3. Uses GNSS UTC time to determine which second each PPS corresponds to
+    4. Performs linear regression to map millis -> UTC posix timestamp
+
+    Args:
+        pps_list: List of PPS fixes
+        gnss_list: List of GNSS readings
+
+    Returns:
+        Tuple of (slope, intercept) for the linear regression
+    """
+    if not pps_list or not gnss_list:
+        logger.warning("Cannot compute PPS regression: empty PPS or GNSS data")
+        return (0.0, 0.0)
+
+    if len(pps_list) < 2:
+        logger.warning(
+            f"Cannot compute PPS regression: need at least 2 PPS entries, "
+            f"got {len(pps_list)}"
+        )
+        return (0.0, 0.0)
+
+    # Unwrap millis for both PPS and GNSS
+    pps_millis_raw = [p.millis_reading for p in pps_list]
+    gnss_millis_raw = [g.millis_reading for g in gnss_list]
+
+    pps_millis_unwrapped = unwrap_millis(pps_millis_raw)
+    gnss_millis_unwrapped = unwrap_millis(gnss_millis_raw)
+
+    # For each PPS entry, find the closest GNSS entry by millis
+    pps_matched_millis = []
+    pps_matched_utc = []
+
+    for i, pps_millis in enumerate(pps_millis_unwrapped):
+        # Find closest GNSS entry
+        min_diff = float("inf")
+        closest_gnss_idx = 0
+
+        for j, gnss_millis in enumerate(gnss_millis_unwrapped):
+            diff = abs(gnss_millis - pps_millis)
+            if diff < min_diff:
+                min_diff = diff
+                closest_gnss_idx = j
+
+        # Get the UTC timestamp from the matched GNSS entry
+        gnss_entry = gnss_list[closest_gnss_idx]
+        utc_timestamp = gnss_entry.posix_timestamp + gnss_entry.microseconds / 1e6
+
+        # Round to nearest second (PPS marks the second boundary)
+        utc_second = round(utc_timestamp)
+
+        pps_matched_millis.append(pps_millis)
+        pps_matched_utc.append(float(utc_second))
+
+    # Perform linear regression
+    # To avoid numerical inaccuracies, subtract the minimum millis value
+    min_millis = min(pps_matched_millis)
+    pps_matched_millis_offset = [m - min_millis for m in pps_matched_millis]
+
+    slope, intercept_offset, r_value, p_value, std_err = stats.linregress(
+        pps_matched_millis_offset, pps_matched_utc
+    )
+
+    # Adjust intercept to account for the offset we subtracted
+    intercept = intercept_offset - slope * min_millis
+
+    logger.info(f"PPS regression: slope={slope:.12f}, intercept={intercept:.6f}")
+    logger.info(f"  R²={r_value**2:.9f}, p-value={p_value:.2e}, std_err={std_err:.2e}")
+    logger.info(f"  Used {len(pps_matched_millis)} PPS-GNSS matched pairs")
+
+    return (slope, intercept)
+
+
+def apply_pps_regression(
+    pps_list: list[PPSFix],
+    gnss_list: list[GNSSReading],
+    imu_list: list[IMUReading],
+    slope: float,
+    intercept: float,
+) -> None:
+    """Apply PPS regression to all data entries.
+
+    This modifies the dataclass objects in-place, adding the
+    utc_timestamp_from_pps_regression and datetime_timestamp_from_pps_regression fields.
+
+    Args:
+        pps_list: List of PPS fixes
+        gnss_list: List of GNSS readings
+        imu_list: List of IMU readings
+        slope: Regression slope
+        intercept: Regression intercept
+    """
+    # Unwrap and apply to PPS
+    if pps_list:
+        pps_millis_unwrapped = unwrap_millis([p.millis_reading for p in pps_list])
+        for i, pps in enumerate(pps_list):
+            pps.utc_timestamp_from_pps_regression = (
+                slope * pps_millis_unwrapped[i] + intercept
+            )
+            pps.datetime_timestamp_from_pps_regression = datetime.fromtimestamp(
+                pps.utc_timestamp_from_pps_regression, tz=timezone.utc
+            )
+
+    # Unwrap and apply to GNSS
+    if gnss_list:
+        gnss_millis_unwrapped = unwrap_millis([g.millis_reading for g in gnss_list])
+        for i, gnss in enumerate(gnss_list):
+            gnss.utc_timestamp_from_pps_regression = (
+                slope * gnss_millis_unwrapped[i] + intercept
+            )
+            gnss.datetime_timestamp_from_pps_regression = datetime.fromtimestamp(
+                gnss.utc_timestamp_from_pps_regression, tz=timezone.utc
+            )
+
+    # Unwrap and apply to IMU
+    if imu_list:
+        imu_millis_unwrapped = unwrap_millis([imu.millis_reading for imu in imu_list])
+        for i, imu in enumerate(imu_list):
+            imu.utc_timestamp_from_pps_regression = (
+                slope * imu_millis_unwrapped[i] + intercept
+            )
+            imu.datetime_timestamp_from_pps_regression = datetime.fromtimestamp(
+                imu.utc_timestamp_from_pps_regression, tz=timezone.utc
+            )
 
 
 def parse_pps_entry(data: bytes) -> PPSFix:
@@ -454,6 +630,11 @@ def decode_file(
 
     # Print summary statistics
     print_summary_statistics(pps_list, gnss_list, imu_list)
+
+    # Compute and apply PPS regression
+    logger.info("Computing PPS to UTC timestamp regression...")
+    slope, intercept = compute_pps_regression(pps_list, gnss_list)
+    apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
 
     base_name = input_file.stem
     output_files = {}
