@@ -1,0 +1,14 @@
+name: ola_ism330dhcx_samm10q_decoder
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pytest
+  - loguru
+  - pylint
+  - ruff
+  - flake8
+  - pip
+  - pip:
+    - complexipy

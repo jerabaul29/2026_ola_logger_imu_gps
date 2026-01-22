@@ -34,6 +34,8 @@ Everything for parsing etc is written in python
   - dataclasses to model C/C++ structs
   - numpy for the arrays and dump the data as npy; use the type "object" for the arrays to contain the dataclasses objects; enrich the dataclass with "scaled" values for the IMU (float scaled values by the sensors sensitivity in addition to raw int16_t readings)
   - no more package imports needed
+- code defensively: user asserts to document and check all assumptions about incoming data, especially line lengths / raw binary data size; if some assert fail, log an error with enough details to understand what happened and exit with an error (raise an exception)
+- make sure that the asserts are really useful and not tautological - asserts should really check that the data match what is expected, i.e. check that the input from the "messy real world" (in particular, sd card files written by the logger) match the assumptions about the structure of the file and content
 
 ## Code setup and environment management: mamba
 
@@ -50,6 +52,7 @@ Everything for parsing etc is written in python
 - use individual functions to parse each raw data kind (i.e. parse 1 line of raw data)
 - write a single function to parse a single file and write the npy to disk
 - when dumping to disk, there should be an individual .npy file for each datakind, containing a numpy array of dataclass objects matching the object kind
+- after parsing, summarize the information: both file duration based on the millis information (take the first and last millis from IMU measurements), number of messages of each kind parsed, corresponding effective frequency
 
 ## Misc
 

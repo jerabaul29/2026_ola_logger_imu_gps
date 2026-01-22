@@ -2,6 +2,13 @@
 
 The information below is from the PlatformIO C++ project in the sibling directory: see `../logger_ola_imu_gps` for more details about the code running on the logger. The data files are pre allocated to be a total of `10 * 1024 * 1024` bytes, and may contain empty data or trash data at the end of the file.
 
+The default logging rates are:
+  - ISM330DHCX: around 437 Hz
+  - GNSS position: around 10 Hz
+  - PPS: around 1 Hz
+
+The default sd data file duration is 15 minutes, and new files are started by the logger at UTC minutes 00, 15, 30, 45. If a file is started at boot, it may start at a different minute than these, but will end at the next such UTC minute.
+
 Filename format: this is generated in C++:
 
 ```cpp
