@@ -8,6 +8,6 @@ See https://github.com/jerabaul29/2026_ola_logger_imu_gps/tree/main/decoder for 
 
 ---
 
-I wrote the firmware largely myself with help from Copilot in PlatformIO + VSC.
+I wrote the firmware as a team together with help from Copilot in PlatformIO + VSC.
 
-I wrote the decoder largely using Copilot CLI, only writing down the intent and letting Copilot CLI build the actual implementation.
+I wrote the decoder largely using Copilot CLI, only writing down the intent in the SPEC.md and AGENT.md, and letting Copilot CLI build the actual implementation with just a couple of prompt interactions with it.
