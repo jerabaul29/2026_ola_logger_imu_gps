@@ -65,6 +65,11 @@ print(f"First IMU: {imu_data[0]}")
 # IMU data includes scaled values with units
 print(f"Acceleration X: {imu_data[0].acc_x_mg} mg")
 print(f"Gyro X: {imu_data[0].gyr_x_mdps} mdps")
+
+# All entries include synchronized UTC timestamps from PPS regression
+print(f"IMU timestamp (MCU millis): {imu_data[0].millis_reading}")
+print(f"IMU timestamp (UTC posix): {imu_data[0].utc_timestamp_from_pps_regression}")
+print(f"IMU timestamp (UTC datetime): {imu_data[0].datetime_timestamp_from_pps_regression}")
 ```
 
 ## Running Tests
@@ -98,26 +103,51 @@ For each input file `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.dat`, the decoder gener
 
 ## Data Structures
 
+All data structures include timestamps derived from linear regression between PPS and GNSS data for accurate absolute time synchronization.
+
 ### PPSFix
-- `millis_reading`: Milliseconds timestamp from microcontroller
+- `millis_reading`: Milliseconds timestamp from microcontroller (uint32_t)
+- `utc_timestamp_from_pps_regression`: UTC timestamp (float, seconds since epoch) computed from linear regression
+- `datetime_timestamp_from_pps_regression`: UTC datetime object (timezone-aware) derived from the regression
 
 ### GNSSReading
-- `millis_reading`: Milliseconds timestamp
-- `latitude`: Latitude (scaled integer)
-- `longitude`: Longitude (scaled integer)
-- `posix_timestamp`: POSIX time (seconds)
-- `microseconds`: Microseconds component
-- `ned_vel_north`: North velocity in NED frame
-- `ned_vel_east`: East velocity in NED frame
-- `ned_vel_down`: Down velocity in NED frame
+- `millis_reading`: Milliseconds timestamp from microcontroller
+- `latitude`: Latitude (raw scaled integer, divide by 1e7 for degrees)
+- `longitude`: Longitude (raw scaled integer, divide by 1e7 for degrees)
+- `posix_timestamp`: POSIX time from GNSS receiver (seconds)
+- `microseconds`: Microseconds component from GNSS receiver
+- `ned_vel_north`: North velocity in NED frame (raw integer, mm/s)
+- `ned_vel_east`: East velocity in NED frame (raw integer, mm/s)
+- `ned_vel_down`: Down velocity in NED frame (raw integer, mm/s)
 - `fix_type`: GPS fix type (0=no fix, 2=2D, 3=3D)
+- `latitude_dd`: Latitude in decimal degrees (float, derived from latitude/1e7)
+- `longitude_dd`: Longitude in decimal degrees (float, derived from longitude/1e7)
+- `ned_vel_north_mmps`: North velocity in mm/s (int, copy of ned_vel_north)
+- `ned_vel_east_mmps`: East velocity in mm/s (int, copy of ned_vel_east)
+- `ned_vel_down_mmps`: Down velocity in mm/s (int, copy of ned_vel_down)
+- `datetime_utc`: UTC datetime from GNSS receiver (timezone-aware, derived from posix_timestamp + microseconds)
+- `utc_timestamp_from_pps_regression`: UTC timestamp (float, seconds since epoch) from linear regression
+- `datetime_timestamp_from_pps_regression`: UTC datetime from regression (timezone-aware)
 
 ### IMUReading
-- `millis_reading`: Milliseconds timestamp
+- `millis_reading`: Milliseconds timestamp from microcontroller
 - `acc_x`, `acc_y`, `acc_z`: Raw accelerometer readings (int16)
 - `gyr_x`, `gyr_y`, `gyr_z`: Raw gyroscope readings (int16)
-- `acc_x_mg`, `acc_y_mg`, `acc_z_mg`: Scaled acceleration in milli-g (mg), where 1g ≈ 9.81 m/s²
-- `gyr_x_mdps`, `gyr_y_mdps`, `gyr_z_mdps`: Scaled angular velocity in millidegrees per second (mdps)
+- `acc_x_mg`, `acc_y_mg`, `acc_z_mg`: Scaled acceleration in milli-g (float, mg), where 1g ≈ 9.81 m/s²
+- `gyr_x_mdps`, `gyr_y_mdps`, `gyr_z_mdps`: Scaled angular velocity in millidegrees per second (float, mdps)
+- `utc_timestamp_from_pps_regression`: UTC timestamp (float, seconds since epoch) from linear regression
+- `datetime_timestamp_from_pps_regression`: UTC datetime from regression (timezone-aware)
+
+## Timestamp Synchronization
+
+The decoder automatically performs linear regression between PPS (pulse-per-second) events and GNSS timestamps to create an accurate mapping from microcontroller millisecond timestamps to absolute UTC time. This process:
+
+1. **Unwraps** the uint32_t millisecond timestamps to handle overflow at 2³² milliseconds (~49.7 days)
+2. **Matches** each PPS event with the nearest GNSS timestamp to establish reference points
+3. **Performs** linear regression to compute a high-precision mapping: `utc_time = slope × millis + intercept`
+4. **Applies** this mapping to all entries (PPS, GNSS, and IMU) to add synchronized UTC timestamps
+
+The regression typically achieves R² > 0.999999, providing microsecond-accurate absolute timestamps for all sensor data. Use `datetime_timestamp_from_pps_regression` for convenient timezone-aware datetime objects, or `utc_timestamp_from_pps_regression` for numerical calculations.
 
 ## File Format
 
