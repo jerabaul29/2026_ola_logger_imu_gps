@@ -10,6 +10,8 @@ dependencies:
   - pylint
   - ruff
   - flake8
+  - gnuplot
   - pip
   - pip:
     - complexipy
+    - gnuplotlib

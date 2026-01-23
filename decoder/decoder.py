@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 from loguru import logger
 from scipy import stats
+import gnuplotlib as gp
 
 # Magic constants
 HEADER_SEARCH_BYTES = 64 * 1024
@@ -447,6 +448,82 @@ def parse_imu_entry(
     )
 
 
+def compute_pps_mismatch_statistics(pps_list: list[PPSFix]) -> None:
+    """Compute and display PPS mismatch statistics and plot.
+    
+    For each PPS entry, computes the mismatch between the UTC datetime 
+    from linear regression and the closest UTC second. Displays statistics
+    and an ASCII terminal plot showing how the mismatch varies over time.
+    
+    Args:
+        pps_list: List of PPS fixes with regression timestamps computed
+    """
+    if not pps_list:
+        logger.warning("No PPS data available for mismatch analysis")
+        return
+    
+    # Check if regression was computed
+    if pps_list[0].utc_timestamp_from_pps_regression is None:
+        logger.warning("PPS regression not computed, skipping mismatch analysis")
+        return
+    
+    # Compute mismatch for each PPS entry
+    mismatches = []
+    for pps in pps_list:
+        utc_timestamp = pps.utc_timestamp_from_pps_regression
+        closest_second = round(utc_timestamp)
+        mismatch = utc_timestamp - closest_second
+        mismatches.append(mismatch)
+    
+    mismatches_array = np.array(mismatches)
+    
+    # Compute statistics
+    max_mismatch = np.max(np.abs(mismatches_array))
+    mean_mismatch = np.mean(mismatches_array)
+    rms_mismatch = np.sqrt(np.mean(mismatches_array ** 2))
+    
+    # Log statistics
+    logger.info("")
+    logger.info("PPS Mismatch Statistics (UTC regression vs closest second):")
+    logger.info(f"  Max absolute mismatch: {max_mismatch * 1000:.3f} ms")
+    logger.info(f"  Mean mismatch:         {mean_mismatch * 1000:.3f} ms")
+    logger.info(f"  RMS mismatch:          {rms_mismatch * 1000:.3f} ms")
+    
+    # Prepare data for plotting
+    # X-axis: time since first PPS (in seconds)
+    first_pps_utc = pps_list[0].utc_timestamp_from_pps_regression
+    x_data = np.array([
+        pps.utc_timestamp_from_pps_regression - first_pps_utc
+        for pps in pps_list
+    ])
+    
+    # Y-axis: mismatch in milliseconds
+    y_data = mismatches_array * 1000
+    
+    # Plot using gnuplotlib
+    import sys
+    # Temporarily redirect stderr to stdout to ensure plot appears correctly
+    old_stderr = sys.stderr
+    sys.stderr = sys.stdout
+    
+    print("")  # Print blank line directly to stdout
+    print("PPS Mismatch vs Time Plot:")
+    sys.stdout.flush()
+    gp.plot(
+        x_data, y_data,
+        _with='lines',
+        terminal='dumb 80,24',
+        unset='grid',
+        xlabel='Time since first PPS (seconds)',
+        ylabel='UTC mismatch (ms)',
+        title='PPS UTC Mismatch (ms): Regression vs Closest Second'
+    )
+    print("")  # Print blank line after plot
+    
+    # Restore stderr
+    sys.stderr = old_stderr
+
+
 def print_summary_statistics(
     pps_list: list[PPSFix],
     gnss_list: list[GNSSReading],
@@ -679,6 +756,9 @@ def decode_file(
     else:
         slope, intercept = regression
         apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
+        
+        # Compute and display PPS mismatch statistics
+        compute_pps_mismatch_statistics(pps_list)
 
     base_name = input_file.stem
     output_files = {}

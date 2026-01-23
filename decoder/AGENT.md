@@ -18,6 +18,7 @@
 - the `./example_decode.py` script contains an example of how to decode the data file using the decoder functions
 - the `./test_decoder.py` module contains the tests to run
 - write and keep up to date a README.md file to explain how to install the mamba env, run the code, etc.
+- as you need more packages, make sure these are all registered in the mamba environment config file
 
 ## Code practices
 
@@ -38,6 +39,7 @@ Everything for parsing etc is written in python
   - dataclasses to model C/C++ structs
   - numpy for the arrays and dump the data as npy; use the type "object" for the arrays to contain the dataclasses objects; enrich the dataclass with "scaled" values for the IMU (float scaled values by the sensors sensitivity in addition to raw int16_t readings)
   - scipy for linear regression
+  - gnuplotlib for asicc plots in terminal
   - no more package imports needed
 - code defensively: user asserts to document and check all assumptions about incoming data, especially line lengths / raw binary data size; if some assert fail, log an error with enough details to understand what happened and exit with an error (raise an exception)
 - make sure that the asserts are really useful and not tautological - asserts should really check that the data match what is expected, i.e. check that the input from the "messy real world" (in particular, sd card files written by the logger) match the assumptions about the structure of the file and content
