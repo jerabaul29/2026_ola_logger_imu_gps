@@ -11,17 +11,17 @@ from loguru import logger
 from scipy import stats
 
 # Magic constants
-HEADER_LINES_TO_READ = 10
+HEADER_SEARCH_BYTES = 64 * 1024
 PPS_MARKER = b"\nPPS"
 GPS_MARKER = b"\nGPS"
 IMU_MARKER = b"\nIMU"
 FOOTER_MARKER = b"Log stop OLA"
 MARKER_SIZE = 4
 PPS_STRUCT_SIZE = 4
-GPS_STRUCT_SIZE = 33
+GPS_STRUCT_SIZE = 36
 IMU_STRUCT_SIZE = 16
 PPS_LINE_SIZE = MARKER_SIZE + PPS_STRUCT_SIZE  # 8 bytes
-GPS_LINE_SIZE = MARKER_SIZE + GPS_STRUCT_SIZE  # 37 bytes
+GPS_LINE_SIZE = MARKER_SIZE + GPS_STRUCT_SIZE  # 40 bytes
 IMU_LINE_SIZE = MARKER_SIZE + IMU_STRUCT_SIZE  # 20 bytes
 
 
@@ -78,11 +78,17 @@ class IMUReading:
     datetime_timestamp_from_pps_regression: datetime | None = None
 
 
-def parse_header(file_path: Path) -> dict[str, Any]:
+def parse_header(
+    file_path: Path,
+    markers: tuple[bytes, bytes, bytes] = (PPS_MARKER, GPS_MARKER, IMU_MARKER),
+    search_bytes: int = HEADER_SEARCH_BYTES,
+) -> dict[str, Any]:
     """Parse the header of the data file and extract metadata.
 
     Args:
         file_path: Path to the data file
+        markers: Tuple of markers that indicate start of data section
+        search_bytes: Number of bytes to scan from start of file for header
 
     Returns:
         Dictionary containing parsed header information
@@ -90,11 +96,14 @@ def parse_header(file_path: Path) -> dict[str, Any]:
     header_info = {}
 
     with open(file_path, "rb") as f:
-        header_lines = []
-        for _ in range(HEADER_LINES_TO_READ):
-            line = f.readline()
-            if line:
-                header_lines.append(line.decode("utf-8", errors="ignore"))
+        content = f.read(search_bytes)
+
+    marker_positions = [
+        pos for m in markers if (pos := content.find(m)) != -1
+    ]
+    header_end = min(marker_positions) if marker_positions else len(content)
+    header_text = content[:header_end].decode("utf-8", errors="ignore")
+    header_lines = header_text.splitlines()
 
     for line in header_lines:
         if "ISM330DHCX Acc sensitivity" in line:
@@ -161,7 +170,7 @@ def compute_pps_regression(
     pps_list: list[PPSFix],
     gnss_list: list[GNSSReading],
     global_min_millis: int | None = None,
-) -> tuple[float, float]:
+) -> tuple[float, float] | None:
     """Compute linear regression from PPS millis to UTC timestamps.
 
     This function:
@@ -176,18 +185,19 @@ def compute_pps_regression(
         global_min_millis: Minimum millis value across all data types (for offset)
 
     Returns:
-        Tuple of (slope, intercept) for the linear regression
+        Tuple of (slope, intercept) for the linear regression, or None if
+        insufficient data
     """
     if not pps_list or not gnss_list:
         logger.warning("Cannot compute PPS regression: empty PPS or GNSS data")
-        return (0.0, 0.0)
+        return None
 
     if len(pps_list) < 2:
         logger.warning(
             f"Cannot compute PPS regression: need at least 2 PPS entries, "
             f"got {len(pps_list)}"
         )
-        return (0.0, 0.0)
+        return None
 
     # Unwrap millis for both PPS and GNSS
     pps_millis_raw = [p.millis_reading for p in pps_list]
@@ -197,6 +207,7 @@ def compute_pps_regression(
     gnss_millis_unwrapped = unwrap_millis(gnss_millis_raw)
 
     # For each PPS entry, find the closest GNSS entry by millis
+    # and determine which UTC second boundary the PPS marks
     pps_matched_millis = []
     pps_matched_utc = []
 
@@ -214,9 +225,15 @@ def compute_pps_regression(
         # Get the UTC timestamp from the matched GNSS entry
         gnss_entry = gnss_list[closest_gnss_idx]
         utc_timestamp = gnss_entry.posix_timestamp + gnss_entry.microseconds / 1e6
-
-        # Round to nearest second (PPS marks the second boundary)
-        utc_second = round(utc_timestamp)
+        
+        # Determine which second boundary this PPS marks
+        # The PPS marks the start of a second. We estimate which second
+        # by looking at the UTC time of the closest GNSS and the millis offset
+        millis_offset = pps_millis - gnss_millis_unwrapped[closest_gnss_idx]
+        estimated_pps_utc = utc_timestamp + millis_offset / 1000.0
+        
+        # The PPS second is the second boundary closest to the estimated time
+        utc_second = round(estimated_pps_utc)
 
         pps_matched_millis.append(pps_millis)
         pps_matched_utc.append(float(utc_second))
@@ -331,10 +348,12 @@ def parse_gnss_entry(data: bytes) -> GNSSReading:
         AssertionError: If data size is incorrect
     """
     assert len(data) == GPS_STRUCT_SIZE, (
-        f"GNSS data size mismatch: expected exactly {GPS_STRUCT_SIZE} bytes, "
-        f"got {len(data)} bytes"
+        f"GNSS data size mismatch: expected exactly {GPS_STRUCT_SIZE} bytes "
+        f"(33 bytes struct + 3 bytes padding), got {len(data)} bytes"
     )
-    values = struct.unpack("<IiiiIiiiB", data[:33])
+    # Unpack first 33 bytes (actual struct), ignore 3 bytes padding
+    data_to_unpack = data[:33]
+    values = struct.unpack("<IiiiIiiiB", data_to_unpack)
 
     millis_reading = values[0]
     latitude = values[1]
@@ -456,7 +475,8 @@ def print_summary_statistics(
         duration_s = duration_ms / 1000.0
         duration_min = duration_s / 60.0
 
-        logger.info("\nFile duration (from IMU timestamps):")
+        logger.info("")
+        logger.info("File duration (from IMU timestamps):")
         logger.info(f"  First millis: {first_millis}")
         logger.info(f"  Last millis:  {last_millis}")
         logger.info(
@@ -465,7 +485,8 @@ def print_summary_statistics(
         )
 
         if duration_s > 0:
-            logger.info("\nEffective sampling rates:")
+            logger.info("")
+            logger.info("Effective sampling rates:")
             if len(pps_list) > 0:
                 pps_rate = len(pps_list) / duration_s
                 logger.info(f"  PPS:  {pps_rate:.3f} Hz")
@@ -514,7 +535,7 @@ def decode_file(
         output_dir = input_file.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    header_info = parse_header(input_file)
+    header_info = parse_header(input_file, markers=(pps_marker, gps_marker, imu_marker))
     acc_sensitivity = header_info.get("acc_sensitivity", 0.061)
     gyr_sensitivity = header_info.get("gyr_sensitivity", 4.375)
 
@@ -652,8 +673,12 @@ def decode_file(
     logger.info(f"Global minimum millis reading: {global_min_millis}")
 
     logger.info("Computing PPS to UTC timestamp regression...")
-    slope, intercept = compute_pps_regression(pps_list, gnss_list, global_min_millis)
-    apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
+    regression = compute_pps_regression(pps_list, gnss_list, global_min_millis)
+    if regression is None:
+        logger.warning("Skipping PPS regression due to insufficient data")
+    else:
+        slope, intercept = regression
+        apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
 
     base_name = input_file.stem
     output_files = {}

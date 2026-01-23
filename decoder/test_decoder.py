@@ -30,7 +30,7 @@ def test_parse_pps_entry():
 
 def test_parse_gnss_entry():
     """Test parsing a GNSS entry."""
-    data = struct.pack(
+    packed = struct.pack(
         "<IiiiIiiiB",
         10000,
         123456789,
@@ -41,8 +41,8 @@ def test_parse_gnss_entry():
         -50,
         25,
         3,
-    )
-    gnss = parse_gnss_entry(data)
+    ) + b"\x00\x00\x00"  # Add 3 bytes padding to reach 36 bytes
+    gnss = parse_gnss_entry(packed)
     assert isinstance(gnss, GNSSReading)
     assert gnss.millis_reading == 10000
     assert gnss.latitude == 123456789
@@ -139,9 +139,13 @@ GNSS update rate (Hz): 10
 """
 
     pps_entry = b"\nPPS" + struct.pack("<I", 1000)
-    gnss_entry = b"\nGPS" + struct.pack(
-        "<IiiiIiiiB", 2000, 12345678, -87654321, 1705000000, 0, 10, 20, 5, 3
-    )
+    gnss_entry = (
+        b"\nGPS"
+        + struct.pack(
+            "<IiiiIiiiB", 2000, 12345678, -87654321, 1705000000, 0, 10, 20, 5, 3
+        )
+        + b"\x00\x00\x00"
+    )  # pad to 36 bytes (33 struct + 3 padding)
     imu_entry = b"\nIMU" + struct.pack("<Ihhhhhh", 3000, 100, 200, 300, 50, 100, 150)
     footer = b"\n\nLog stop OLA ISM330DHCX SAM-M10Q logger\n"
 
@@ -182,9 +186,9 @@ def test_parse_entry_assertions():
     with pytest.raises(AssertionError, match="PPS data size mismatch"):
         parse_pps_entry(b"12345")  # Too long
 
-    # Test GNSS assertion
+    # Test GNSS assertion - should expect exactly 36 bytes (33 struct + 3 padding)
     with pytest.raises(AssertionError, match="GNSS data size mismatch"):
-        parse_gnss_entry(b"1" * 30)  # Too short
+        parse_gnss_entry(b"1" * 33)  # Too short (missing padding)
 
     with pytest.raises(AssertionError, match="GNSS data size mismatch"):
         parse_gnss_entry(b"1" * 40)  # Too long
@@ -261,7 +265,9 @@ def test_compute_pps_regression():
         ),
     ]
 
-    slope, intercept = compute_pps_regression(pps_list, gnss_list)
+    regression = compute_pps_regression(pps_list, gnss_list)
+    assert regression is not None
+    slope, intercept = regression
 
     # Expected: utc = slope * millis + intercept
     # With our data: utc=1 at millis=1000, utc=2 at millis=2000, etc.
