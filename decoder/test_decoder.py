@@ -10,11 +10,13 @@ from decoder import (
     GNSSReading,
     IMUReading,
     PPSFix,
+    compute_pps_regression,
     decode_file,
     parse_gnss_entry,
     parse_header,
     parse_imu_entry,
     parse_pps_entry,
+    unwrap_millis,
 )
 
 
@@ -193,3 +195,77 @@ def test_parse_entry_assertions():
 
     with pytest.raises(AssertionError, match="IMU data size mismatch"):
         parse_imu_entry(b"1" * 20)  # Too long
+
+
+def test_unwrap_millis_no_wrapping():
+    """Test unwrap_millis with no wrapping."""
+    millis = [1000, 2000, 3000, 4000]
+    unwrapped = unwrap_millis(millis)
+    assert unwrapped == [1000, 2000, 3000, 4000]
+
+
+def test_unwrap_millis_with_wrapping():
+    """Test unwrap_millis with wrapping at uint32_t boundary."""
+    UINT32_MAX = 2**32
+    # Simulate wrap: values go from near max to near zero
+    millis = [UINT32_MAX - 1000, UINT32_MAX - 500, 100, 500]
+    unwrapped = unwrap_millis(millis)
+
+    # After unwrapping, values should be monotonic
+    assert unwrapped[0] == UINT32_MAX - 1000
+    assert unwrapped[1] == UINT32_MAX - 500
+    assert unwrapped[2] == UINT32_MAX + 100
+    assert unwrapped[3] == UINT32_MAX + 500
+
+
+def test_unwrap_millis_empty():
+    """Test unwrap_millis with empty list."""
+    assert unwrap_millis([]) == []
+
+
+def test_compute_pps_regression():
+    """Test PPS to UTC regression computation."""
+    # Create synthetic PPS and GNSS data with known relationship
+    # millis = slope * utc + intercept
+    # For simplicity: 1000 ms = 1 second UTC starting at t=1000
+    pps_list = [
+        PPSFix(millis_reading=1000),
+        PPSFix(millis_reading=2000),
+        PPSFix(millis_reading=3000),
+    ]
+
+    gnss_list = [
+        GNSSReading(
+            millis_reading=1000, latitude=0, longitude=0,
+            posix_timestamp=1, microseconds=0,
+            ned_vel_north=0, ned_vel_east=0, ned_vel_down=0, fix_type=3,
+            latitude_dd=0.0, longitude_dd=0.0,
+            ned_vel_north_mmps=0, ned_vel_east_mmps=0, ned_vel_down_mmps=0,
+            datetime_utc=None
+        ),
+        GNSSReading(
+            millis_reading=2000, latitude=0, longitude=0,
+            posix_timestamp=2, microseconds=0,
+            ned_vel_north=0, ned_vel_east=0, ned_vel_down=0, fix_type=3,
+            latitude_dd=0.0, longitude_dd=0.0,
+            ned_vel_north_mmps=0, ned_vel_east_mmps=0, ned_vel_down_mmps=0,
+            datetime_utc=None
+        ),
+        GNSSReading(
+            millis_reading=3000, latitude=0, longitude=0,
+            posix_timestamp=3, microseconds=0,
+            ned_vel_north=0, ned_vel_east=0, ned_vel_down=0, fix_type=3,
+            latitude_dd=0.0, longitude_dd=0.0,
+            ned_vel_north_mmps=0, ned_vel_east_mmps=0, ned_vel_down_mmps=0,
+            datetime_utc=None
+        ),
+    ]
+
+    slope, intercept = compute_pps_regression(pps_list, gnss_list)
+
+    # Expected: utc = slope * millis + intercept
+    # With our data: utc=1 at millis=1000, utc=2 at millis=2000, etc.
+    # slope should be 0.001 (1 second per 1000 millis)
+    assert abs(slope - 0.001) < 1e-6
+    # intercept should be 0 (utc = 0.001 * millis + 0)
+    assert abs(intercept - 0.0) < 1e-6

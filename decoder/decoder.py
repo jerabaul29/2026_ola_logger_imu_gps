@@ -160,6 +160,7 @@ def unwrap_millis(millis_list: list[int]) -> list[int]:
 def compute_pps_regression(
     pps_list: list[PPSFix],
     gnss_list: list[GNSSReading],
+    global_min_millis: int | None = None,
 ) -> tuple[float, float]:
     """Compute linear regression from PPS millis to UTC timestamps.
 
@@ -172,6 +173,7 @@ def compute_pps_regression(
     Args:
         pps_list: List of PPS fixes
         gnss_list: List of GNSS readings
+        global_min_millis: Minimum millis value across all data types (for offset)
 
     Returns:
         Tuple of (slope, intercept) for the linear regression
@@ -198,7 +200,7 @@ def compute_pps_regression(
     pps_matched_millis = []
     pps_matched_utc = []
 
-    for i, pps_millis in enumerate(pps_millis_unwrapped):
+    for pps_millis in pps_millis_unwrapped:
         # Find closest GNSS entry
         min_diff = float("inf")
         closest_gnss_idx = 0
@@ -221,7 +223,12 @@ def compute_pps_regression(
 
     # Perform linear regression
     # To avoid numerical inaccuracies, subtract the minimum millis value
-    min_millis = min(pps_matched_millis)
+    # Use global minimum if provided, otherwise use minimum from PPS data
+    if global_min_millis is None:
+        min_millis = min(pps_matched_millis)
+    else:
+        min_millis = global_min_millis
+
     pps_matched_millis_offset = [m - min_millis for m in pps_matched_millis]
 
     slope, intercept_offset, r_value, p_value, std_err = stats.linregress(
@@ -632,8 +639,20 @@ def decode_file(
     print_summary_statistics(pps_list, gnss_list, imu_list)
 
     # Compute and apply PPS regression
+    # Find global minimum millis across all data types
+    all_millis = []
+    if pps_list:
+        all_millis.extend([p.millis_reading for p in pps_list])
+    if gnss_list:
+        all_millis.extend([g.millis_reading for g in gnss_list])
+    if imu_list:
+        all_millis.extend([i.millis_reading for i in imu_list])
+
+    global_min_millis = min(all_millis) if all_millis else 0
+    logger.info(f"Global minimum millis reading: {global_min_millis}")
+
     logger.info("Computing PPS to UTC timestamp regression...")
-    slope, intercept = compute_pps_regression(pps_list, gnss_list)
+    slope, intercept = compute_pps_regression(pps_list, gnss_list, global_min_millis)
     apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
 
     base_name = input_file.stem
