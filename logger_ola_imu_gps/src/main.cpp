@@ -110,9 +110,9 @@ struct IMU_reading{
 char entry_kind[4];
 bool should_log_data = false;
 
-PPS_fix common_pps_fix;
-GNSS_reading common_gnss_reading;
-IMU_reading common_imu_reading;
+PPS_fix common_isr_pps_fix;
+GNSS_reading common_isr_gnss_reading;
+IMU_reading common_isr_imu_reading;
 
 etl::deque<PPS_fix, SIZE_DEQUE_PPS> deque_PPS_fixes;
 etl::deque<GNSS_reading, SIZE_DEQUE_GNSS> deque_GNSS_readings;
@@ -176,18 +176,18 @@ extern "C" void am_ctimer_isr(void)
         }
 
         if (acc_available && gyr_available){
-          common_imu_reading.millis_reading = millis();
-          common_imu_reading.acc_x = acc_value[0];
-          common_imu_reading.acc_y = acc_value[1];
-          common_imu_reading.acc_z = acc_value[2];
-          common_imu_reading.gyr_x = gyr_value[0];
-          common_imu_reading.gyr_y = gyr_value[1];
-          common_imu_reading.gyr_z = gyr_value[2];
+          common_isr_imu_reading.millis_reading = millis();
+          common_isr_imu_reading.acc_x = acc_value[0];
+          common_isr_imu_reading.acc_y = acc_value[1];
+          common_isr_imu_reading.acc_z = acc_value[2];
+          common_isr_imu_reading.gyr_x = gyr_value[0];
+          common_isr_imu_reading.gyr_y = gyr_value[1];
+          common_isr_imu_reading.gyr_z = gyr_value[2];
 
           if (deque_IMU_readings.full()){
             deque_IMU_readings.pop_front();
           }
-          deque_IMU_readings.push_back(common_imu_reading);
+          deque_IMU_readings.push_back(common_isr_imu_reading);
 
           number_imu_samples_logged++;
 
@@ -204,20 +204,20 @@ extern "C" void am_ctimer_isr(void)
     if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ / 2) == 0){
       // check if we have a new GNSS reading; if yes, push fix to deque
       if (log_GNSS.getPVT()){
-        common_gnss_reading.millis_reading = millis();
-        common_gnss_reading.latitude = log_GNSS.getLatitude();
-        common_gnss_reading.longitude = log_GNSS.getLongitude();
-        common_gnss_reading.posix_timestamp = log_GNSS.getUnixEpoch(common_gnss_reading.microseconds);
-        common_gnss_reading.NED_vel_north = log_GNSS.getNedNorthVel();
-        common_gnss_reading.NED_vel_east = log_GNSS.getNedEastVel();
-        common_gnss_reading.NED_vel_down = log_GNSS.getNedDownVel();
-        common_gnss_reading.fix_type = log_GNSS.getFixType();
+        common_isr_gnss_reading.millis_reading = millis();
+        common_isr_gnss_reading.latitude = log_GNSS.getLatitude();
+        common_isr_gnss_reading.longitude = log_GNSS.getLongitude();
+        common_isr_gnss_reading.posix_timestamp = log_GNSS.getUnixEpoch(common_isr_gnss_reading.microseconds);
+        common_isr_gnss_reading.NED_vel_north = log_GNSS.getNedNorthVel();
+        common_isr_gnss_reading.NED_vel_east = log_GNSS.getNedEastVel();
+        common_isr_gnss_reading.NED_vel_down = log_GNSS.getNedDownVel();
+        common_isr_gnss_reading.fix_type = log_GNSS.getFixType();
 
         if (deque_GNSS_readings.full()){
           deque_GNSS_readings.pop_front();
         }
 
-        deque_GNSS_readings.push_back(common_gnss_reading);
+        deque_GNSS_readings.push_back(common_isr_gnss_reading);
 
         number_gnss_fixes_logged++;
 
@@ -245,12 +245,12 @@ void isr_PPS() {
 
   last_pps_millis = current_millis;
 
-  common_pps_fix.millis_reading = current_millis;
+  common_isr_pps_fix.millis_reading = current_millis;
 
   if (deque_PPS_fixes.full()){
     deque_PPS_fixes.pop_front();
   }
-  deque_PPS_fixes.push_back(common_pps_fix);
+  deque_PPS_fixes.push_back(common_isr_pps_fix);
 
   number_pps_fixes_logged++;
 
@@ -591,6 +591,11 @@ void setup() {
   uint32_t posix_timestamp;
   uint32_t posix_timestamp_next_file;
 
+  // Local stack variables for main loop to avoid race conditions with ISRs
+  PPS_fix local_pps_fix;
+  GNSS_reading local_gnss_reading;
+  IMU_reading local_imu_reading;
+
   while (true){
     // create a new file
     SERIAL_USB->println();
@@ -675,6 +680,8 @@ void setup() {
     accumulated_sd_time_millis = 0;
 
     while (board_time_manager.get_posix_timestamp() < posix_timestamp_next_file){
+      should_log_data = false;
+
       // log
       // the logging from sensors to dequeues buffers is taken care of by the ISR driven routines
 
@@ -759,7 +766,7 @@ void setup() {
       working_deque_size = deque_PPS_fixes.size();
       if (working_deque_size > 0){
         should_log_data = true;
-        common_pps_fix = deque_PPS_fixes.front();
+        local_pps_fix = deque_PPS_fixes.front();
         deque_PPS_fixes.pop_front();
       }
 
@@ -770,8 +777,10 @@ void setup() {
         entry_kind[1] = 'P';
         entry_kind[2] = 'P';
         entry_kind[3] = 'S';
+        working_millis = millis();
         sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(entry_kind), sizeof(entry_kind));
-        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&common_pps_fix), sizeof(common_pps_fix));
+        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&local_pps_fix), sizeof(local_pps_fix));
+        accumulated_sd_time_millis += (millis() - working_millis);
         should_log_data = false;
       }
 
@@ -785,7 +794,7 @@ void setup() {
       working_deque_size = deque_GNSS_readings.size();
       if (working_deque_size > 0){
         should_log_data = true;
-        common_gnss_reading = deque_GNSS_readings.front();
+        local_gnss_reading = deque_GNSS_readings.front();
         deque_GNSS_readings.pop_front();
       }
 
@@ -798,7 +807,7 @@ void setup() {
         entry_kind[3] = 'S';
         working_millis = millis();
         sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(entry_kind), sizeof(entry_kind));
-        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&common_gnss_reading), sizeof(common_gnss_reading));
+        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&local_gnss_reading), sizeof(local_gnss_reading));
         accumulated_sd_time_millis += (millis() - working_millis);
         should_log_data = false;
       }
@@ -813,7 +822,7 @@ void setup() {
       working_deque_size = deque_IMU_readings.size();
       if (working_deque_size > 0){
         should_log_data = true;
-        common_imu_reading = deque_IMU_readings.front();
+        local_imu_reading = deque_IMU_readings.front();
         deque_IMU_readings.pop_front();
       }
 
@@ -826,7 +835,7 @@ void setup() {
         entry_kind[3] = 'U';
         working_millis = millis();
         sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(entry_kind), sizeof(entry_kind));
-        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&common_imu_reading), sizeof(common_imu_reading));
+        sd_card_manager.write_buffer(reinterpret_cast<const uint8_t*>(&local_imu_reading), sizeof(local_imu_reading));
         accumulated_sd_time_millis += (millis() - working_millis);
         should_log_data = false;
       }
