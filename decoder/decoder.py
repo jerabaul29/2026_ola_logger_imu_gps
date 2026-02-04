@@ -9,7 +9,17 @@ from typing import Any
 import numpy as np
 from loguru import logger
 from scipy import stats
-import gnuplotlib as gp
+
+# Try to import gnuplotlib, but don't fail if not available
+try:
+    import gnuplotlib as gp
+    GNUPLOT_AVAILABLE = True
+except ImportError:
+    GNUPLOT_AVAILABLE = False
+    logger.warning(
+        "gnuplotlib not available - plots will be disabled. "
+        "Install with: pip install gnuplotlib"
+    )
 
 # Magic constants
 HEADER_SEARCH_BYTES = 64 * 1024
@@ -448,7 +458,10 @@ def parse_imu_entry(
     )
 
 
-def compute_pps_mismatch_statistics(pps_list: list[PPSFix]) -> None:
+def compute_pps_mismatch_statistics(
+    pps_list: list[PPSFix],
+    show_plot: bool = False
+) -> None:
     """Compute and display PPS mismatch statistics and plot.
     
     For each PPS entry, computes the mismatch between the UTC datetime 
@@ -457,6 +470,7 @@ def compute_pps_mismatch_statistics(pps_list: list[PPSFix]) -> None:
     
     Args:
         pps_list: List of PPS fixes with regression timestamps computed
+        show_plot: If True, display ASCII plot of mismatch vs time
     """
     if not pps_list:
         logger.warning("No PPS data available for mismatch analysis")
@@ -489,39 +503,46 @@ def compute_pps_mismatch_statistics(pps_list: list[PPSFix]) -> None:
     logger.info(f"  Mean mismatch:         {mean_mismatch * 1000:.3f} ms")
     logger.info(f"  RMS mismatch:          {rms_mismatch * 1000:.3f} ms")
     
-    # Prepare data for plotting
-    # X-axis: time since first PPS (in seconds)
-    first_pps_utc = pps_list[0].utc_timestamp_from_pps_regression
-    x_data = np.array([
-        pps.utc_timestamp_from_pps_regression - first_pps_utc
-        for pps in pps_list
-    ])
-    
-    # Y-axis: mismatch in milliseconds
-    y_data = mismatches_array * 1000
-    
-    # Plot using gnuplotlib
-    import sys
-    # Temporarily redirect stderr to stdout to ensure plot appears correctly
-    old_stderr = sys.stderr
-    sys.stderr = sys.stdout
-    
-    print("")  # Print blank line directly to stdout
-    print("PPS Mismatch vs Time Plot:")
-    sys.stdout.flush()
-    gp.plot(
-        x_data, y_data,
-        _with='lines',
-        terminal='dumb 80,24',
-        unset='grid',
-        xlabel='Time since first PPS (seconds)',
-        ylabel='UTC mismatch (ms)',
-        title='PPS UTC Mismatch (ms): Regression vs Closest Second'
-    )
-    print("")  # Print blank line after plot
-    
-    # Restore stderr
-    sys.stderr = old_stderr
+    if show_plot:
+        if not GNUPLOT_AVAILABLE:
+            logger.error(
+                "Cannot display plots: gnuplotlib is not available. "
+                "Install with: pip install gnuplotlib"
+            )
+            return
+        # Prepare data for plotting
+        # X-axis: time since first PPS (in seconds)
+        first_pps_utc = pps_list[0].utc_timestamp_from_pps_regression
+        x_data = np.array([
+            pps.utc_timestamp_from_pps_regression - first_pps_utc
+            for pps in pps_list
+        ])
+        
+        # Y-axis: mismatch in milliseconds
+        y_data = mismatches_array * 1000
+        
+        # Plot using gnuplotlib
+        import sys
+        # Temporarily redirect stderr to stdout to ensure plot appears correctly
+        old_stderr = sys.stderr
+        sys.stderr = sys.stdout
+        
+        print("")  # Print blank line directly to stdout
+        print("PPS Mismatch vs Time Plot:")
+        sys.stdout.flush()
+        gp.plot(
+            x_data, y_data,
+            _with='lines',
+            terminal='dumb 80,24',
+            unset='grid',
+            xlabel='Time since first PPS (seconds)',
+            ylabel='UTC mismatch (ms)',
+            title='PPS UTC Mismatch (ms): Regression vs Closest Second'
+        )
+        print("")  # Print blank line after plot
+        
+        # Restore stderr
+        sys.stderr = old_stderr
 
 
 def print_summary_statistics(
@@ -582,6 +603,7 @@ def print_summary_statistics(
 def decode_file(
     input_file: Path,
     output_dir: Path | None = None,
+    show_plots: bool = False,
     pps_marker: bytes = PPS_MARKER,
     gps_marker: bytes = GPS_MARKER,
     imu_marker: bytes = IMU_MARKER,
@@ -595,6 +617,7 @@ def decode_file(
     Args:
         input_file: Path to input data file
         output_dir: Directory to save output files (defaults to same as input)
+        show_plots: If True, display ASCII plots (e.g., PPS mismatch plot)
         pps_marker: Marker bytes for PPS entries
         gps_marker: Marker bytes for GPS entries
         imu_marker: Marker bytes for IMU entries
@@ -758,7 +781,7 @@ def decode_file(
         apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
         
         # Compute and display PPS mismatch statistics
-        compute_pps_mismatch_statistics(pps_list)
+        compute_pps_mismatch_statistics(pps_list, show_plot=show_plots)
 
     base_name = input_file.stem
     output_files = {}

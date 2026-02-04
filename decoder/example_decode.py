@@ -49,7 +49,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     logger.info(f"Decoding data file: {data_file}")
-    output_files = decode_file(data_file)
+    # To enable ASCII plots, set show_plots=True
+    output_files = decode_file(data_file, show_plots=False)
 
     logger.info("")
     logger.info("=" * 80)

@@ -9,6 +9,8 @@ This decoder parses binary data files from the OLA logger and converts them into
 - **GNSS**: GPS/GNSS navigation data (position, velocity, fix type)
 - **IMU**: Accelerometer and gyroscope readings with automatic scaling
 
+**Note**: ASCII plots (for visualizing PPS mismatch) require `gnuplotlib`, which is optional. The decoder will work without it, but plots will be unavailable.
+
 ## Installation
 
 ### Prerequisites
@@ -18,8 +20,8 @@ Ensure `mamba` is installed on your system. If not available, ask for assistance
 ### Setup Environment
 
 ```bash
-# Create the conda environment from the YAML file
-mamba env create -f environment.yml
+# Create the conda environment from the YAML file (use -y flag for non-interactive)
+mamba env create -f environment.yml -y
 
 # Activate the environment
 mamba activate ola_ism330dhcx_samm10q_decoder
@@ -50,7 +52,8 @@ from decoder import decode_file
 
 # Decode a data file
 data_file = Path("DATA_BOOT_0055_TIME_20260120T211500.dat")
-output_files = decode_file(data_file)
+# Set show_plots=True to display ASCII plots (disabled by default)
+output_files = decode_file(data_file, show_plots=False)
 
 # Load the decoded data
 pps_data = np.load(output_files["pps"], allow_pickle=True)
@@ -70,6 +73,9 @@ print(f"Gyro X: {imu_data[0].gyr_x_mdps} mdps")
 print(f"IMU timestamp (MCU millis): {imu_data[0].millis_reading}")
 print(f"IMU timestamp (UTC posix): {imu_data[0].utc_timestamp_from_pps_regression}")
 print(f"IMU timestamp (UTC datetime): {imu_data[0].datetime_timestamp_from_pps_regression}")
+
+# Enable ASCII plots for visualization (disabled by default)
+output_files_with_plots = decode_file(data_file, show_plots=True)
 ```
 
 ## Running Tests
