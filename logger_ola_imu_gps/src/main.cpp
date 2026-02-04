@@ -83,11 +83,11 @@ float effective_gnss_logging_rate_hz {0.0f};
 float effective_pps_logging_rate_hz {0.0f};
 
 struct PPS_fix {
-  unsigned long millis_reading;
+  unsigned long micros_reading;
 };
 
 struct GNSS_reading {
-  unsigned long millis_reading;
+  unsigned long micros_reading;
   int32_t latitude;
   int32_t longitude;
   uint32_t posix_timestamp;
@@ -99,7 +99,8 @@ struct GNSS_reading {
 };
 
 struct IMU_reading{
-  unsigned long millis_reading;
+  unsigned long micros_reading;
+  uint16_t counter;
   int16_t acc_x;
   int16_t acc_y;
   int16_t acc_z;
@@ -120,6 +121,7 @@ etl::deque<GNSS_reading, SIZE_DEQUE_GNSS> deque_GNSS_readings;
 etl::deque<IMU_reading, SIZE_DEQUE_IMU> deque_IMU_readings;
 
 volatile uint32_t ctimer_isr_count {0};
+volatile uint16_t imu_isr_count {0};
 
 // ISR handler for CTIMER interrupts
 // we use teh CTIMER to generate periodic interrupts for the data logging tasks
@@ -177,7 +179,9 @@ extern "C" void am_ctimer_isr(void)
         }
 
         if (acc_available && gyr_available){
-          common_isr_imu_reading.millis_reading = millis();
+          common_isr_imu_reading.micros_reading = micros();
+          common_isr_imu_reading.counter = imu_isr_count;
+          imu_isr_count++;
           common_isr_imu_reading.acc_x = acc_value[0];
           common_isr_imu_reading.acc_y = acc_value[1];
           common_isr_imu_reading.acc_z = acc_value[2];
@@ -205,7 +209,7 @@ extern "C" void am_ctimer_isr(void)
     if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ / 3) == 0){
       // check if we have a new GNSS reading; if yes, push fix to deque
       if (log_GNSS.getPVT()){
-        common_isr_gnss_reading.millis_reading = millis();
+        common_isr_gnss_reading.micros_reading = micros();
         common_isr_gnss_reading.latitude = log_GNSS.getLatitude();
         common_isr_gnss_reading.longitude = log_GNSS.getLongitude();
         common_isr_gnss_reading.posix_timestamp = log_GNSS.getUnixEpoch(common_isr_gnss_reading.microseconds);
@@ -232,21 +236,21 @@ extern "C" void am_ctimer_isr(void)
   }
 }
 
-volatile unsigned long last_pps_millis {0};
+volatile unsigned long last_pps_micros {0};
 
 void isr_PPS() {
-  unsigned long current_millis = millis();
+  unsigned long current_micros = micros();
 
-  if (current_millis - last_pps_millis < 500){
+  if (current_micros - last_pps_micros < 500000){
     // debounce: ignore if within 500 ms of last PPS
     // as this may mean we have a bouncing signal
-    last_pps_millis = current_millis;
+    last_pps_micros = current_micros;
     return;
   }
 
-  last_pps_millis = current_millis;
+  last_pps_micros = current_micros;
 
-  common_isr_pps_fix.millis_reading = current_millis;
+  common_isr_pps_fix.micros_reading = current_micros;
 
   if (deque_PPS_fixes.full()){
     deque_PPS_fixes.pop_front();
