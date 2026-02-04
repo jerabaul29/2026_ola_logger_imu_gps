@@ -11,6 +11,18 @@ This decoder parses binary data files from the OLA logger and converts them into
 
 **Note**: ASCII plots (for visualizing PPS mismatch) require `gnuplotlib`, which is optional. The decoder will work without it, but plots will be unavailable.
 
+## Project Structure
+
+- `decoder.py` - Core decoding module with all parsing functions
+- `decoder_cli.py` - Command-line interface for decoding and visualization
+- `example_decode.py` - Example script showing programmatic usage
+- `test_decoder.py` - Tests for decoder module
+- `test_decoder_cli.py` - Tests for CLI tool
+- `environment.yml` - Mamba/conda environment specification
+- `AGENT.md` - Development guidelines and code practices
+- `SPEC.md` - Binary file format specification
+- `README.md` - This file
+
 ## Installation
 
 ### Prerequisites
@@ -28,6 +40,27 @@ mamba activate ola_ism330dhcx_samm10q_decoder
 ```
 
 ## Usage
+
+### Command-Line Interface (CLI)
+
+The easiest way to decode and visualize data is using the CLI tool:
+
+```bash
+# Basic usage - decode file and show plots
+python decoder_cli.py -p DATA_BOOT_0055_TIME_20260120T211500.dat
+
+# Show help
+python decoder_cli.py --help
+```
+
+The CLI tool will:
+1. Decode the data file (showing decoder logs)
+2. Generate five matplotlib visualizations:
+   - 3-axis acceleration (mg)
+   - 3-axis gyroscope (mdps)
+   - GNSS coordinates (latitude/longitude over time)
+   - Time differences between consecutive IMU and GNSS entries (from both micros and UTC regression)
+   - PPS mismatch (UTC regression vs closest second)
 
 ### Example Script
 
@@ -70,7 +103,7 @@ print(f"Acceleration X: {imu_data[0].acc_x_mg} mg")
 print(f"Gyro X: {imu_data[0].gyr_x_mdps} mdps")
 
 # All entries include synchronized UTC timestamps from PPS regression
-print(f"IMU timestamp (MCU millis): {imu_data[0].millis_reading}")
+print(f"IMU timestamp (MCU micros): {imu_data[0].micros_reading}")
 print(f"IMU timestamp (UTC posix): {imu_data[0].utc_timestamp_from_pps_regression}")
 print(f"IMU timestamp (UTC datetime): {imu_data[0].datetime_timestamp_from_pps_regression}")
 
@@ -81,7 +114,8 @@ output_files_with_plots = decode_file(data_file, show_plots=True)
 ## Running Tests
 
 ```bash
-pytest test_decoder.py -v
+# Run all tests
+pytest -v .
 ```
 
 ## Code Quality Checks
@@ -112,12 +146,12 @@ For each input file `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.dat`, the decoder gener
 All data structures include timestamps derived from linear regression between PPS and GNSS data for accurate absolute time synchronization.
 
 ### PPSFix
-- `millis_reading`: Milliseconds timestamp from microcontroller (uint32_t)
+- `micros_reading`: Microseconds timestamp from microcontroller (uint32_t)
 - `utc_timestamp_from_pps_regression`: UTC timestamp (float, seconds since epoch) computed from linear regression
 - `datetime_timestamp_from_pps_regression`: UTC datetime object (timezone-aware) derived from the regression
 
 ### GNSSReading
-- `millis_reading`: Milliseconds timestamp from microcontroller
+- `micros_reading`: Microseconds timestamp from microcontroller
 - `latitude`: Latitude (raw scaled integer, divide by 1e7 for degrees)
 - `longitude`: Longitude (raw scaled integer, divide by 1e7 for degrees)
 - `posix_timestamp`: POSIX time from GNSS receiver (seconds)
@@ -136,7 +170,8 @@ All data structures include timestamps derived from linear regression between PP
 - `datetime_timestamp_from_pps_regression`: UTC datetime from regression (timezone-aware)
 
 ### IMUReading
-- `millis_reading`: Milliseconds timestamp from microcontroller
+- `micros_reading`: Microseconds timestamp from microcontroller
+- `counter`: Sample counter (uint16) incremented for each IMU sample
 - `acc_x`, `acc_y`, `acc_z`: Raw accelerometer readings (int16)
 - `gyr_x`, `gyr_y`, `gyr_z`: Raw gyroscope readings (int16)
 - `acc_x_mg`, `acc_y_mg`, `acc_z_mg`: Scaled acceleration in milli-g (float, mg), where 1g ≈ 9.81 m/s²
@@ -146,11 +181,11 @@ All data structures include timestamps derived from linear regression between PP
 
 ## Timestamp Synchronization
 
-The decoder automatically performs linear regression between PPS (pulse-per-second) events and GNSS timestamps to create an accurate mapping from microcontroller millisecond timestamps to absolute UTC time. This process:
+The decoder automatically performs linear regression between PPS (pulse-per-second) events and GNSS timestamps to create an accurate mapping from microcontroller microsecond timestamps to absolute UTC time. This process:
 
-1. **Unwraps** the uint32_t millisecond timestamps to handle overflow at 2³² milliseconds (~49.7 days)
+1. **Unwraps** the uint32_t microsecond timestamps to handle overflow at 2³² microseconds (~71.6 minutes)
 2. **Matches** each PPS event with the nearest GNSS timestamp to establish reference points
-3. **Performs** linear regression to compute a high-precision mapping: `utc_time = slope × millis + intercept`
+3. **Performs** linear regression to compute a high-precision mapping: `utc_time = slope × micros + intercept`
 4. **Applies** this mapping to all entries (PPS, GNSS, and IMU) to add synchronized UTC timestamps
 
 The regression typically achieves R² > 0.999999, providing microsecond-accurate absolute timestamps for all sensor data. Use `datetime_timestamp_from_pps_regression` for convenient timezone-aware datetime objects, or `utc_timestamp_from_pps_regression` for numerical calculations.

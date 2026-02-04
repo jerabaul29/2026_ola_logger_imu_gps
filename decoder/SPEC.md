@@ -75,13 +75,13 @@ For the GPS, the units are as follow:
         entry_kind[3] = 'U';
 ```
 
-    - then a raw dump of the C++ respective struct (unsigned long is 32 bits) follows as (in all the following, millis_reading is the microcontroller arduino core `millis()` output):
+    - then a raw dump of the C++ respective struct (unsigned long is 32 bits) follows as (in all the following, micros_reading is the microcontroller arduino core `micros()` output):
 
       - for the PPS entries:
 
 ```cpp
 struct PPS_fix {
-  unsigned long millis_reading;
+  unsigned long micros_reading;
 };
 ```
 
@@ -89,7 +89,7 @@ struct PPS_fix {
 
 ```cpp
 struct GNSS_reading {
-  unsigned long millis_reading;
+  unsigned long micros_reading;
   int32_t latitude;
   int32_t longitude;
   uint32_t posix_timestamp;
@@ -105,7 +105,8 @@ struct GNSS_reading {
 
 ```cpp
 struct IMU_reading{
-  unsigned long millis_reading;
+  unsigned long micros_reading;
+  uint16_t counter;
   int16_t acc_x;
   int16_t acc_y;
   int16_t acc_z;
@@ -114,6 +115,8 @@ struct IMU_reading{
   int16_t gyr_z;
 };  
 ```
+
+Note: The IMU struct has 2 bytes of padding added by the C compiler for alignment, making the actual on-disk size 20 bytes (18 bytes struct + 2 bytes padding) before the newline marker.
 
 For the IMU entries, the scaling from the `int16_t` to actual float values are to be performed using the sensitivity values provided in the header.
 

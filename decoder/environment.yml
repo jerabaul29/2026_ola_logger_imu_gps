@@ -11,6 +11,8 @@ dependencies:
   - ruff
   - flake8
   - gnuplot
+  - matplotlib
+  - click
   - pip
   - pip:
     - complexipy

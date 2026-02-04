@@ -6,10 +6,10 @@
 - see the spec in the `./SPEC.md` file; make sure to read it
 - the OLA (OpenLogArtemis) logger runs a C/C++ bare metal firmware are logs to SD card
 - the OLA logger logs an IMU (ISM330DHCX) and a GNSS (SAM-M10Q GPS, both logging some navigation data and the PPS 1Hz rising edge)
-- in addition, the decoder combines the PPS and GPS data to generate a mapping from milliseconds to UTC datetime. For this:
-    - since the `millis()` uses `uint32_t` on the OLA MCU, the parser checks for possible wrapping: going through the ordered list of `millis_reading` for each kind of data, if a jump by more than `2**32 / 2` is detected, a "dealiasing additional offset" is increased by an additional `2**32` for all following `millis_reading` values
-    - the PPS and GNSS data are cross compared; for each PPS `millis_reading`, the closest GPS `millis_reading` is found and the associated `posix_timestamp + microseconds/1e6` is used to determine which second start the PPS entry corresponds to; this is used to generate a dataset of "unwrapped millis" from the PPS data vs "matching UTC second" from the GNSS data; a linear regression is then established to go from `millis_reading` to "UTC posix timestamp"; to avoid numerical inaccuracies, the offset (lowest millis observed within the file) is subtracted from the millis MCU timestamps data in all linear regression tasks
-    - the linear regression is used to generate a `utc_timestamp_from_pps_regression` variable that is added to the dataclass of each kind of data, applying the linear regression to the `millis_reading` for each data entry
+- in addition, the decoder combines the PPS and GPS data to generate a mapping from microseconds to UTC datetime. For this:
+    - since the `micros()` uses `uint32_t` on the OLA MCU, the parser checks for possible wrapping: going through the ordered list of `micros_reading` for each kind of data, if a jump by more than `2**32 / 2` is detected, a "dealiasing additional offset" is increased by an additional `2**32` for all following `micros_reading` values
+    - the PPS and GNSS data are cross compared; for each PPS `micros_reading`, the closest GPS `micros_reading` is found and the associated `posix_timestamp + microseconds/1e6` is used to determine which second start the PPS entry corresponds to; this is used to generate a dataset of "unwrapped micros" from the PPS data vs "matching UTC second" from the GNSS data; a linear regression is then established to go from `micros_reading` to "UTC posix timestamp"; to avoid numerical inaccuracies, the offset (lowest micros observed within the file) is subtracted from the micros MCU timestamps data in all linear regression tasks
+    - the linear regression is used to generate a `utc_timestamp_from_pps_regression` variable that is added to the dataclass of each kind of data, applying the linear regression to the `micros_reading` for each data entry
 
 ## Code and data organization
 
@@ -40,6 +40,8 @@ Everything for parsing etc is written in python
   - numpy for the arrays and dump the data as npy; use the type "object" for the arrays to contain the dataclasses objects; enrich the dataclass with "scaled" values for the IMU (float scaled values by the sensors sensitivity in addition to raw int16_t readings)
   - scipy for linear regression
   - gnuplotlib for asicc plots in terminal
+  - matplotlib for interactive plots
+  - click to build cli tools
   - no more package imports needed
 - code defensively: user asserts to document and check all assumptions about incoming data, especially line lengths / raw binary data size; if some assert fail, log an error with enough details to understand what happened and exit with an error (raise an exception)
 - make sure that the asserts are really useful and not tautological - asserts should really check that the data match what is expected, i.e. check that the input from the "messy real world" (in particular, sd card files written by the logger) match the assumptions about the structure of the file and content
@@ -61,7 +63,7 @@ Everything for parsing etc is written in python
 - use individual functions to parse each raw data kind (i.e. parse 1 line of raw data)
 - write a single function to parse a single file and write the npy to disk
 - when dumping to disk, there should be an individual .npy file for each datakind, containing a numpy array of dataclass objects matching the object kind
-- after parsing, summarize the information: both file duration based on the millis information (take the first and last millis from IMU measurements), number of messages of each kind parsed, corresponding effective frequency
+- after parsing, summarize the information: both file duration based on the micros information (take the first and last micros from IMU measurements), number of messages of each kind parsed, corresponding effective frequency
 
 ## Misc
 

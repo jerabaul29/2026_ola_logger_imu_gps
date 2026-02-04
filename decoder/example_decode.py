@@ -42,7 +42,7 @@ def print_data_sample(data, data_type: str, n: int = 10) -> None:
 
 
 if __name__ == "__main__":
-    data_file = Path("DATA_BOOT_0055_TIME_20260120T211500.dat")
+    data_file = Path("DATA_BOOT_0000_TIME_20260204T193000.dat")
 
     if not data_file.exists():
         logger.error(f"Data file not found: {data_file}")
