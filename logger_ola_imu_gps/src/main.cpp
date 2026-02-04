@@ -33,12 +33,12 @@ SFE_UBLOX_GNSS log_GNSS;
 static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
 
 // static constexpr float ISM330DHCX_ODR_HZ = 12.5f;
-static constexpr float ISM330DHCX_ODR_HZ = 208.0f + 1.0f;
-// static constexpr float ISM330DHCX_ODR_HZ = 417.0f + 1.0f;
+static constexpr float ISM330DHCX_ODR_HZ = 208.0f;
+// static constexpr float ISM330DHCX_ODR_HZ = 417.0f;
 
 // Timer configuration
 static constexpr int TIMER_NUM = 2;
-static constexpr uint32_t TIMER_FREQ_HZ = static_cast<uint32_t>(3 * ISM330DHCX_ODR_HZ);
+static constexpr uint32_t TIMER_FREQ_HZ = static_cast<uint32_t>(2 * ISM330DHCX_ODR_HZ);
 // static constexpr uint32_t TIMER_FREQ_HZ = 1000;
 
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
@@ -206,7 +206,7 @@ extern "C" void am_ctimer_isr(void)
     }
 
     // if time to read GNSS data, do it and store in deque
-    if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ / 3) == 0){
+    if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ / 2) == 0){
       // check if we have a new GNSS reading; if yes, push fix to deque
       if (log_GNSS.getPVT()){
         common_isr_gnss_reading.micros_reading = micros();
@@ -501,17 +501,6 @@ void setup() {
     delay(10);
     wdt.restart();
 
-    float ODR_read;
-    AccGyr.ACC_GetOutputDataRate(&ODR_read);
-    SERIAL_USB->print(F("ISM330DHCX Acc ODR set to: "));
-    SERIAL_USB->println(ODR_read);
-    delay(10);
-    AccGyr.GYRO_GetOutputDataRate(&ODR_read);
-    SERIAL_USB->print(F("ISM330DHCX Gyr ODR set to: "));
-    SERIAL_USB->println(ODR_read);
-    delay(10);
-    wdt.restart();
-
     AccGyr.ACC_SetFullScale(ISM330DHCX_2g);
     delay(10);
     AccGyr.GYRO_SetFullScale(ISM330DHCX_125dps);
@@ -521,6 +510,17 @@ void setup() {
     AccGyr.FIFO_ACC_Set_BDR(ISM330DHCX_ODR_HZ);
     delay(10);
     AccGyr.FIFO_GYRO_Set_BDR(ISM330DHCX_ODR_HZ);
+    delay(10);
+    wdt.restart();
+
+    float ODR_read;
+    AccGyr.ACC_GetOutputDataRate(&ODR_read);
+    SERIAL_USB->print(F("ISM330DHCX Acc ODR set to: "));
+    SERIAL_USB->println(ODR_read);
+    delay(10);
+    AccGyr.GYRO_GetOutputDataRate(&ODR_read);
+    SERIAL_USB->print(F("ISM330DHCX Gyr ODR set to: "));
+    SERIAL_USB->println(ODR_read);
     delay(10);
     wdt.restart();
 
@@ -534,7 +534,7 @@ void setup() {
     SERIAL_USB->println(gyr_sensitivity, 6);
     delay(10);
     wdt.restart();
-
+  
     AccGyr.FIFO_Set_Mode(ISM330DHCX_FIFO_MODE);
     delay(10);
     wdt.restart();
