@@ -40,6 +40,7 @@ static constexpr float ISM330DHCX_ODR_HZ = 208.0f;
 static constexpr int TIMER_NUM = 2;
 static constexpr uint32_t TIMER_FREQ_HZ = static_cast<uint32_t>(2 * ISM330DHCX_ODR_HZ);
 // static constexpr uint32_t TIMER_FREQ_HZ = 1000;
+static constexpr uint32_t TIMER_DIVIDER_GNSS = static_cast<uint32_t>(TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ / 1.5);
 
 static constexpr uint32_t SERIAL_TIMEOUT_MS = 5000;      ///< Max wait for serial connection
 
@@ -206,7 +207,7 @@ extern "C" void am_ctimer_isr(void)
     }
 
     // if time to read GNSS data, do it and store in deque
-    if (ctimer_isr_count % (TIMER_FREQ_HZ / GNSS_FREQUENCY_HZ / 2) == 0){
+    if (ctimer_isr_count % (TIMER_DIVIDER_GNSS) == 0){
       // check if we have a new GNSS reading; if yes, push fix to deque
       if (log_GNSS.getPVT()){
         common_isr_gnss_reading.micros_reading = micros();
