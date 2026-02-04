@@ -372,6 +372,7 @@ void setup() {
   /////////////////////////////////////////////////////////////////////////////////
 
   int start_attempt {1};
+  bool setup_successful = false;
 
   while (start_attempt<=5){
     SERIAL_USB->print(F("Setup attempt #: "));
@@ -473,6 +474,7 @@ void setup() {
     if (AccGyr.begin() != ISM330DHCX_OK){
       SERIAL_USB->println(F("problem starting ISM330DHCX"));
       
+      detachInterrupt(PIN_LOG_PPS);
       log_GNSS.end();
       I2C_QWIIC->end();
       delay(500);
@@ -540,9 +542,6 @@ void setup() {
     // Power up the clock
     am_hal_clkgen_control(AM_HAL_CLKGEN_CONTROL_SYSCLK_MAX, 0);
     
-    // Enable global interrupts
-    am_hal_interrupt_master_enable();
-    
     // Stop timer
     am_hal_ctimer_stop(TIMER_NUM, AM_HAL_CTIMER_TIMERA);
     
@@ -572,10 +571,25 @@ void setup() {
     
     // Start the timer
     am_hal_ctimer_start(TIMER_NUM, AM_HAL_CTIMER_TIMERA);
+    
+    // Enable global interrupts after timer is fully configured and started
+    am_hal_interrupt_master_enable();
+    
     Serial.println(F("Timer started!"));
     wdt.restart();
 
+    setup_successful = true;
     break;
+  }
+
+  // Check if setup succeeded
+  if (!setup_successful) {
+    SERIAL_USB->println(F("FATAL ERROR: Hardware setup failed after all retry attempts!"));
+    SERIAL_USB->println(F("Entering infinite loop to trigger watchdog reset..."));
+    while (true) {
+      delay(1000);
+      // Watchdog will reset the board
+    }
   }
 
   /////////////////////////////////////////////////////////////////////////////////
@@ -674,10 +688,13 @@ void setup() {
 
     last_stats_time_millis = millis();
     accumulated_sd_time_millis = 0;
+    
+    // Reset counters atomically
+    am_hal_interrupt_master_disable();
     number_imu_samples_logged = 0;
     number_gnss_fixes_logged = 0;
     number_pps_fixes_logged = 0;
-    accumulated_sd_time_millis = 0;
+    am_hal_interrupt_master_enable();
 
     while (board_time_manager.get_posix_timestamp() < posix_timestamp_next_file){
       should_log_data = false;
@@ -695,10 +712,22 @@ void setup() {
       if (millis() - last_stats_time_millis >= time_between_stats_millis){
         last_stats_time_millis = millis();
 
+        // Read counters atomically
+        am_hal_interrupt_master_disable();
+        unsigned long imu_samples = number_imu_samples_logged;
+        unsigned long gnss_fixes = number_gnss_fixes_logged;
+        unsigned long pps_fixes = number_pps_fixes_logged;
+        size_t max_fifo_ism = max_fifo_size_ism;
+        number_imu_samples_logged = 0;
+        number_gnss_fixes_logged = 0;
+        number_pps_fixes_logged = 0;
+        max_fifo_size_ism = 0;
+        am_hal_interrupt_master_enable();
+
         // compute effective logging rates
-        effective_imu_logging_rate_hz = (number_imu_samples_logged * 1000.0f) / (time_between_stats_millis);
-        effective_gnss_logging_rate_hz = (number_gnss_fixes_logged * 1000.0f) / (time_between_stats_millis);
-        effective_pps_logging_rate_hz = (number_pps_fixes_logged * 1000.0f) / (time_between_stats_millis);
+        effective_imu_logging_rate_hz = (imu_samples * 1000.0f) / (time_between_stats_millis);
+        effective_gnss_logging_rate_hz = (gnss_fixes * 1000.0f) / (time_between_stats_millis);
+        effective_pps_logging_rate_hz = (pps_fixes * 1000.0f) / (time_between_stats_millis);
 
         SERIAL_USB->println();
 
@@ -709,15 +738,11 @@ void setup() {
 
         SERIAL_USB->print(F("Samples logged in last interval: "));
         SERIAL_USB->print(F("IMU: "));
-        SERIAL_USB->print(number_imu_samples_logged);
+        SERIAL_USB->print(imu_samples);
         SERIAL_USB->print(F("; GNSS: "));
-        SERIAL_USB->print(number_gnss_fixes_logged);
+        SERIAL_USB->print(gnss_fixes);
         SERIAL_USB->print(F("; PPS: "));
-        SERIAL_USB->println(number_pps_fixes_logged);
-
-        number_imu_samples_logged = 0;
-        number_gnss_fixes_logged = 0;
-        number_pps_fixes_logged = 0;
+        SERIAL_USB->println(pps_fixes);
 
         SERIAL_USB->print(F("Max deque sizes reached: "));
         SERIAL_USB->print(F("IMU: "));
@@ -725,7 +750,7 @@ void setup() {
         SERIAL_USB->print(F(" over "));
         SERIAL_USB->print(SIZE_DEQUE_IMU);
         SERIAL_USB->print(F("; ISM FIFO: "));
-        SERIAL_USB->print(max_fifo_size_ism);
+        SERIAL_USB->print(max_fifo_ism);
         SERIAL_USB->print(F(" over "));
         SERIAL_USB->print(F("512"));  // determined from test with similar setup
         SERIAL_USB->print(F("; GNSS: "));
@@ -740,7 +765,6 @@ void setup() {
         max_deque_size_imu = 0;
         max_deque_size_gnss = 0;
         max_deque_size_pps = 0;
-        max_fifo_size_ism = 0;
  
         SERIAL_USB->print(F("Effective logging rates (Hz): "));
         SERIAL_USB->print(F("IMU (Hz): "));
