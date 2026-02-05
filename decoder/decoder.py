@@ -42,6 +42,7 @@ class PPSFix:
     """PPS fix data structure."""
 
     micros_reading: int
+    micros_reading_unwrapped: int | None = None
     utc_timestamp_from_pps_regression: float | None = None
     datetime_timestamp_from_pps_regression: datetime | None = None
 
@@ -65,6 +66,7 @@ class GNSSReading:
     ned_vel_east_mmps: int
     ned_vel_down_mmps: int
     datetime_utc: datetime
+    micros_reading_unwrapped: int | None = None
     utc_timestamp_from_pps_regression: float | None = None
     datetime_timestamp_from_pps_regression: datetime | None = None
 
@@ -87,6 +89,8 @@ class IMUReading:
     gyr_x_mdps: float
     gyr_y_mdps: float
     gyr_z_mdps: float
+    micros_reading_unwrapped: int | None = None
+    counter_unwrapped: int | None = None
     utc_timestamp_from_pps_regression: float | None = None
     datetime_timestamp_from_pps_regression: datetime | None = None
 
@@ -144,39 +148,83 @@ def parse_header(
     return header_info
 
 
-def unwrap_micros(micros_list: list[int]) -> list[int]:
-    """Unwrap uint32_t micros timestamps to handle wrapping.
+def unwrap_array(
+    values: np.ndarray,
+    max_value: int,
+    wrap_threshold: float | None = None,
+    jump_threshold: float | None = None,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """Unwrap potentially wrapping array and detect anomalous jumps.
 
-    Since micros() uses uint32_t on the OLA MCU, we need to handle wrapping
-    at 2**32. If a jump of more than 2**32/2 is detected going backwards,
-    we add 2**32 to all following values.
+    This function:
+    1. Detects wraps: large negative jumps near max_value boundary
+    2. Unwraps: applies offset corrections for wrapped values
+    3. Detects jumps on unwrapped data:
+       - Any negative jump (data should be monotonic after unwrapping)
+       - Any positive jump > jump_threshold
 
     Args:
-        micros_list: List of micros timestamps (may have wrapping)
+        values: Array of potentially wrapping values (e.g., micros, counter)
+        max_value: Maximum value before wrapping (e.g., 2**32 for uint32)
+        wrap_threshold: Threshold for wrap detection (default: 0.75 * max_value)
+        jump_threshold: Threshold for jump detection (default: 0.1 * max_value)
 
     Returns:
-        List of unwrapped micros timestamps
+        Tuple of:
+        - unwrapped_array: Array with wrapping corrected
+        - wrap_indices: Indices where wraps occurred (or None if no wraps)
+        - jump_indices: Indices where anomalous jumps occurred (or None if no jumps)
     """
-    if not micros_list:
-        return []
+    if len(values) == 0:
+        return np.array([]), None, None
 
-    UINT32_MAX = 2**32
-    HALF_UINT32 = UINT32_MAX // 2
+    if wrap_threshold is None:
+        wrap_threshold = 0.75 * max_value
+    if jump_threshold is None:
+        jump_threshold = 0.1 * max_value
 
-    unwrapped = [micros_list[0]]
+    # Step 1: Detect wraps and unwrap
+    unwrapped = np.zeros_like(values, dtype=np.int64)
+    unwrapped[0] = values[0]
     offset = 0
+    wrap_indices_list = []
 
-    for i in range(1, len(micros_list)):
-        current = micros_list[i]
-        prev = micros_list[i - 1]
+    for i in range(1, len(values)):
+        current = values[i]
+        prev = values[i - 1]
+        diff = current - prev
 
-        # Detect wrap: if current is much less than prev (jumped backwards)
-        if prev - current > HALF_UINT32:
-            offset += UINT32_MAX
+        # Detect wrap: large negative jump
+        if diff < 0 and abs(diff) > wrap_threshold:
+            offset += max_value
+            wrap_indices_list.append(i)
 
-        unwrapped.append(current + offset)
+        unwrapped[i] = current + offset
 
-    return unwrapped
+    # Step 2: Detect anomalous jumps on unwrapped data
+    jump_indices_list = []
+
+    for i in range(1, len(unwrapped)):
+        diff = unwrapped[i] - unwrapped[i - 1]
+
+        # Any negative jump is anomalous (should be monotonic after unwrapping)
+        # Any positive jump > threshold is anomalous
+        if diff < 0 or diff > jump_threshold:
+            jump_indices_list.append(i)
+
+    # Convert to numpy arrays or None
+    wrap_indices = (
+        np.array(wrap_indices_list, dtype=np.int64)
+        if wrap_indices_list
+        else None
+    )
+    jump_indices = (
+        np.array(jump_indices_list, dtype=np.int64)
+        if jump_indices_list
+        else None
+    )
+
+    return unwrapped, wrap_indices, jump_indices
 
 
 def compute_pps_regression(
@@ -187,14 +235,14 @@ def compute_pps_regression(
     """Compute linear regression from PPS micros to UTC timestamps.
 
     This function:
-    1. Unwraps micros timestamps for both PPS and GNSS data
+    1. Uses unwrapped micros timestamps for both PPS and GNSS data
     2. Matches each PPS timestamp with the closest GNSS timestamp
     3. Uses GNSS UTC time to determine which second each PPS corresponds to
     4. Performs linear regression to map micros -> UTC posix timestamp
 
     Args:
-        pps_list: List of PPS fixes
-        gnss_list: List of GNSS readings
+        pps_list: List of PPS fixes (must have micros_reading_unwrapped populated)
+        gnss_list: List of GNSS readings (must have micros_reading_unwrapped populated)
         global_min_micros: Minimum micros value across all data types (for offset)
 
     Returns:
@@ -212,12 +260,17 @@ def compute_pps_regression(
         )
         return None
 
-    # Unwrap micros for both PPS and GNSS
-    pps_micros_raw = [p.micros_reading for p in pps_list]
-    gnss_micros_raw = [g.micros_reading for g in gnss_list]
-
-    pps_micros_unwrapped = unwrap_micros(pps_micros_raw)
-    gnss_micros_unwrapped = unwrap_micros(gnss_micros_raw)
+    # Get unwrapped micros for both PPS and GNSS
+    pps_micros_unwrapped = [
+        p.micros_reading_unwrapped if p.micros_reading_unwrapped is not None
+        else p.micros_reading
+        for p in pps_list
+    ]
+    gnss_micros_unwrapped = [
+        g.micros_reading_unwrapped if g.micros_reading_unwrapped is not None
+        else g.micros_reading
+        for g in gnss_list
+    ]
 
     # For each PPS entry, find the closest GNSS entry by micros
     # and determine which UTC second boundary the PPS marks
@@ -238,13 +291,13 @@ def compute_pps_regression(
         # Get the UTC timestamp from the matched GNSS entry
         gnss_entry = gnss_list[closest_gnss_idx]
         utc_timestamp = gnss_entry.posix_timestamp + gnss_entry.microseconds / 1e6
-        
+
         # Determine which second boundary this PPS marks
         # The PPS marks the start of a second. We estimate which second
         # by looking at the UTC time of the closest GNSS and the micros offset
         micros_offset = pps_micros - gnss_micros_unwrapped[closest_gnss_idx]
         estimated_pps_utc = utc_timestamp + micros_offset / 1e6
-        
+
         # The PPS second is the second boundary closest to the estimated time
         utc_second = round(estimated_pps_utc)
 
@@ -286,6 +339,7 @@ def apply_pps_regression(
 
     This modifies the dataclass objects in-place, adding the
     utc_timestamp_from_pps_regression and datetime_timestamp_from_pps_regression fields.
+    Uses the unwrapped micros_reading values.
 
     Args:
         pps_list: List of PPS fixes
@@ -294,34 +348,40 @@ def apply_pps_regression(
         slope: Regression slope
         intercept: Regression intercept
     """
-    # Unwrap and apply to PPS
+    # Apply to PPS using unwrapped values
     if pps_list:
-        pps_micros_unwrapped = unwrap_micros([p.micros_reading for p in pps_list])
-        for i, pps in enumerate(pps_list):
+        for pps in pps_list:
+            micros_unwrapped = pps.micros_reading_unwrapped
+            if micros_unwrapped is None:
+                micros_unwrapped = pps.micros_reading
             pps.utc_timestamp_from_pps_regression = (
-                slope * pps_micros_unwrapped[i] + intercept
+                slope * micros_unwrapped + intercept
             )
             pps.datetime_timestamp_from_pps_regression = datetime.fromtimestamp(
                 pps.utc_timestamp_from_pps_regression, tz=timezone.utc
             )
 
-    # Unwrap and apply to GNSS
+    # Apply to GNSS using unwrapped values
     if gnss_list:
-        gnss_micros_unwrapped = unwrap_micros([g.micros_reading for g in gnss_list])
-        for i, gnss in enumerate(gnss_list):
+        for gnss in gnss_list:
+            micros_unwrapped = gnss.micros_reading_unwrapped
+            if micros_unwrapped is None:
+                micros_unwrapped = gnss.micros_reading
             gnss.utc_timestamp_from_pps_regression = (
-                slope * gnss_micros_unwrapped[i] + intercept
+                slope * micros_unwrapped + intercept
             )
             gnss.datetime_timestamp_from_pps_regression = datetime.fromtimestamp(
                 gnss.utc_timestamp_from_pps_regression, tz=timezone.utc
             )
 
-    # Unwrap and apply to IMU
+    # Apply to IMU using unwrapped values
     if imu_list:
-        imu_micros_unwrapped = unwrap_micros([imu.micros_reading for imu in imu_list])
-        for i, imu in enumerate(imu_list):
+        for imu in imu_list:
+            micros_unwrapped = imu.micros_reading_unwrapped
+            if micros_unwrapped is None:
+                micros_unwrapped = imu.micros_reading
             imu.utc_timestamp_from_pps_regression = (
-                slope * imu_micros_unwrapped[i] + intercept
+                slope * micros_unwrapped + intercept
             )
             imu.datetime_timestamp_from_pps_regression = datetime.fromtimestamp(
                 imu.utc_timestamp_from_pps_regression, tz=timezone.utc
@@ -479,12 +539,12 @@ def compute_pps_mismatch_statistics(
     if not pps_list:
         logger.warning("No PPS data available for mismatch analysis")
         return
-    
+
     # Check if regression was computed
     if pps_list[0].utc_timestamp_from_pps_regression is None:
         logger.warning("PPS regression not computed, skipping mismatch analysis")
         return
-    
+
     # Compute mismatch for each PPS entry
     mismatches = []
     for pps in pps_list:
@@ -492,21 +552,21 @@ def compute_pps_mismatch_statistics(
         closest_second = round(utc_timestamp)
         mismatch = utc_timestamp - closest_second
         mismatches.append(mismatch)
-    
+
     mismatches_array = np.array(mismatches)
-    
+
     # Compute statistics
     max_mismatch = np.max(np.abs(mismatches_array))
     mean_mismatch = np.mean(mismatches_array)
     rms_mismatch = np.sqrt(np.mean(mismatches_array ** 2))
-    
+
     # Log statistics
     logger.info("")
     logger.info("PPS Mismatch Statistics (UTC regression vs closest second):")
     logger.info(f"  Max absolute mismatch: {max_mismatch * 1000:.3f} ms")
     logger.info(f"  Mean mismatch:         {mean_mismatch * 1000:.3f} ms")
     logger.info(f"  RMS mismatch:          {rms_mismatch * 1000:.3f} ms")
-    
+
     if show_plot:
         if not GNUPLOT_AVAILABLE:
             logger.error(
@@ -521,16 +581,16 @@ def compute_pps_mismatch_statistics(
             pps.utc_timestamp_from_pps_regression - first_pps_utc
             for pps in pps_list
         ])
-        
+
         # Y-axis: mismatch in milliseconds
         y_data = mismatches_array * 1000
-        
+
         # Plot using gnuplotlib
         import sys
         # Temporarily redirect stderr to stdout to ensure plot appears correctly
         old_stderr = sys.stderr
         sys.stderr = sys.stdout
-        
+
         print("")  # Print blank line directly to stdout
         print("PPS Mismatch vs Time Plot:")
         sys.stdout.flush()
@@ -544,7 +604,7 @@ def compute_pps_mismatch_statistics(
             title='PPS UTC Mismatch (ms): Regression vs Closest Second'
         )
         print("")  # Print blank line after plot
-        
+
         # Restore stderr
         sys.stderr = old_stderr
 
@@ -553,6 +613,7 @@ def print_summary_statistics(
     pps_list: list[PPSFix],
     gnss_list: list[GNSSReading],
     imu_list: list[IMUReading],
+    unwrap_stats: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Print summary statistics about the parsed data.
 
@@ -560,6 +621,7 @@ def print_summary_statistics(
         pps_list: List of parsed PPS entries
         gnss_list: List of parsed GNSS entries
         imu_list: List of parsed IMU entries
+        unwrap_stats: Optional dictionary with unwrap/jump statistics
     """
     logger.info("=" * 60)
     logger.info("SUMMARY STATISTICS")
@@ -570,34 +632,74 @@ def print_summary_statistics(
     logger.info(f"  GNSS: {len(gnss_list):6d}")
     logger.info(f"  IMU:  {len(imu_list):6d}")
 
-    if len(imu_list) >= 2:
-        first_micros = imu_list[0].micros_reading
-        last_micros = imu_list[-1].micros_reading
-        duration_us = last_micros - first_micros
-        duration_s = duration_us / 1e6
-        duration_min = duration_s / 60.0
-
+    # Print unwrap statistics if available
+    if unwrap_stats:
         logger.info("")
-        logger.info("File duration (from IMU timestamps):")
-        logger.info(f"  First micros: {first_micros}")
-        logger.info(f"  Last micros:  {last_micros}")
-        logger.info(
-            f"  Duration:     {duration_s:.2f} seconds "
-            f"({duration_min:.2f} min)"
-        )
+        logger.info("Unwrap and jump statistics:")
+        for data_type, stats in unwrap_stats.items():
+            logger.info(f"  {data_type}:")
+            for field, counts in stats.items():
+                logger.info(f"    {field}:")
+                logger.info(f"      Wraps: {counts['wraps']}")
+                logger.info(f"      Jumps: {counts['jumps']}")
 
-        if duration_s > 0:
+    if len(imu_list) >= 2:
+        # Find first and last non-jumped entries for duration calculation
+        first_idx = 0
+        last_idx = len(imu_list) - 1
+
+        # Get jump indices if available
+        jump_indices = set()
+        if unwrap_stats and "IMU" in unwrap_stats:
+            if "micros_reading" in unwrap_stats["IMU"]:
+                jumps = unwrap_stats["IMU"]["micros_reading"].get("jump_indices")
+                if jumps is not None:
+                    jump_indices = set(jumps)
+
+        # Walk backwards from end to find last non-jumped entry
+        while last_idx > first_idx and last_idx in jump_indices:
+            last_idx -= 1
+
+        # Walk forward from start to find first non-jumped entry
+        while first_idx < last_idx and first_idx in jump_indices:
+            first_idx += 1
+
+        if first_idx < last_idx:
+            # Use unwrapped micros if available, otherwise use raw
+            if imu_list[first_idx].micros_reading_unwrapped is not None:
+                first_micros = imu_list[first_idx].micros_reading_unwrapped
+                last_micros = imu_list[last_idx].micros_reading_unwrapped
+            else:
+                first_micros = imu_list[first_idx].micros_reading
+                last_micros = imu_list[last_idx].micros_reading
+
+            duration_us = last_micros - first_micros
+            duration_s = duration_us / 1e6
+            duration_min = duration_s / 60.0
+
             logger.info("")
-            logger.info("Effective sampling rates:")
-            if len(pps_list) > 0:
-                pps_rate = len(pps_list) / duration_s
-                logger.info(f"  PPS:  {pps_rate:.3f} Hz")
-            if len(gnss_list) > 0:
-                gnss_rate = len(gnss_list) / duration_s
-                logger.info(f"  GNSS: {gnss_rate:.3f} Hz")
-            if len(imu_list) > 0:
-                imu_rate = len(imu_list) / duration_s
-                logger.info(f"  IMU:  {imu_rate:.3f} Hz")
+            logger.info("File duration (from IMU timestamps, excluding jumps):")
+            logger.info(f"  First micros: {first_micros}")
+            logger.info(f"  Last micros:  {last_micros}")
+            logger.info(
+                f"  Duration:     {duration_s:.2f} seconds "
+                f"({duration_min:.2f} min)"
+            )
+
+            if duration_s > 0:
+                logger.info("")
+                logger.info("Effective sampling rates:")
+                if len(pps_list) > 0:
+                    pps_rate = len(pps_list) / duration_s
+                    logger.info(f"  PPS:  {pps_rate:.3f} Hz")
+                if len(gnss_list) > 0:
+                    gnss_rate = len(gnss_list) / duration_s
+                    logger.info(f"  GNSS: {gnss_rate:.3f} Hz")
+                if len(imu_list) > 0:
+                    imu_rate = len(imu_list) / duration_s
+                    logger.info(f"  IMU:  {imu_rate:.3f} Hz")
+        else:
+            logger.warning("All IMU entries have jumps, cannot compute duration")
     else:
         logger.warning("Not enough IMU data to compute duration")
 
@@ -739,7 +841,7 @@ def decode_file(
                 )
                 raise
             idx += imu_struct_size
-            
+
             # Skip padding bytes (C struct alignment adds 2 bytes)
             idx += IMU_PADDING
 
@@ -763,8 +865,79 @@ def decode_file(
         f"Parsed {len(pps_list)} PPS, {len(gnss_list)} GNSS, {len(imu_list)} IMU"
     )
 
+    # Unwrap and detect jumps for all relevant fields
+    logger.info("Unwrapping and detecting jumps in data...")
+    unwrap_stats = {}
+
+    # Process PPS micros_reading
+    if pps_list:
+        pps_micros = np.array([p.micros_reading for p in pps_list])
+        pps_micros_unwrapped, pps_micros_wraps, pps_micros_jumps = unwrap_array(
+            pps_micros, max_value=2**32
+        )
+        for i, pps in enumerate(pps_list):
+            pps.micros_reading_unwrapped = int(pps_micros_unwrapped[i])
+
+        unwrap_stats["PPS"] = {
+            "micros_reading": {
+                "wraps": 0 if pps_micros_wraps is None else len(pps_micros_wraps),
+                "jumps": 0 if pps_micros_jumps is None else len(pps_micros_jumps),
+                "wrap_indices": pps_micros_wraps,
+                "jump_indices": pps_micros_jumps,
+            }
+        }
+
+    # Process GNSS micros_reading
+    if gnss_list:
+        gnss_micros = np.array([g.micros_reading for g in gnss_list])
+        gnss_micros_unwrapped, gnss_micros_wraps, gnss_micros_jumps = unwrap_array(
+            gnss_micros, max_value=2**32
+        )
+        for i, gnss in enumerate(gnss_list):
+            gnss.micros_reading_unwrapped = int(gnss_micros_unwrapped[i])
+
+        unwrap_stats["GNSS"] = {
+            "micros_reading": {
+                "wraps": 0 if gnss_micros_wraps is None else len(gnss_micros_wraps),
+                "jumps": 0 if gnss_micros_jumps is None else len(gnss_micros_jumps),
+                "wrap_indices": gnss_micros_wraps,
+                "jump_indices": gnss_micros_jumps,
+            }
+        }
+
+    # Process IMU micros_reading and counter
+    if imu_list:
+        imu_micros = np.array([i.micros_reading for i in imu_list])
+        imu_micros_unwrapped, imu_micros_wraps, imu_micros_jumps = unwrap_array(
+            imu_micros, max_value=2**32
+        )
+
+        imu_counter = np.array([i.counter for i in imu_list])
+        imu_counter_unwrapped, imu_counter_wraps, imu_counter_jumps = unwrap_array(
+            imu_counter, max_value=2**16, jump_threshold=1
+        )
+
+        for i, imu in enumerate(imu_list):
+            imu.micros_reading_unwrapped = int(imu_micros_unwrapped[i])
+            imu.counter_unwrapped = int(imu_counter_unwrapped[i])
+
+        unwrap_stats["IMU"] = {
+            "micros_reading": {
+                "wraps": 0 if imu_micros_wraps is None else len(imu_micros_wraps),
+                "jumps": 0 if imu_micros_jumps is None else len(imu_micros_jumps),
+                "wrap_indices": imu_micros_wraps,
+                "jump_indices": imu_micros_jumps,
+            },
+            "counter": {
+                "wraps": 0 if imu_counter_wraps is None else len(imu_counter_wraps),
+                "jumps": 0 if imu_counter_jumps is None else len(imu_counter_jumps),
+                "wrap_indices": imu_counter_wraps,
+                "jump_indices": imu_counter_jumps,
+            },
+        }
+
     # Print summary statistics
-    print_summary_statistics(pps_list, gnss_list, imu_list)
+    print_summary_statistics(pps_list, gnss_list, imu_list, unwrap_stats)
 
     # Compute and apply PPS regression
     # Find global minimum micros across all data types
@@ -786,7 +959,7 @@ def decode_file(
     else:
         slope, intercept = regression
         apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
-        
+
         # Compute and display PPS mismatch statistics
         compute_pps_mismatch_statistics(pps_list, show_plot=show_plots)
 
@@ -810,5 +983,8 @@ def decode_file(
     np.save(imu_file, imu_array)
     output_files["imu"] = imu_file
     logger.info(f"Saved IMU data to {imu_file}")
+
+    # Add unwrap statistics to output
+    output_files["unwrap_stats"] = unwrap_stats
 
     return output_files

@@ -16,7 +16,7 @@ from decoder import (
     parse_header,
     parse_imu_entry,
     parse_pps_entry,
-    unwrap_micros,
+    unwrap_array,
 )
 
 
@@ -139,8 +139,8 @@ def test_decode_file_with_real_data():
         assert imu_data[i].micros_reading >= imu_data[i-1].micros_reading, \
             f"Micros not increasing at index {i}"
 
-    for output_file in output_files.values():
-        if output_file.exists():
+    for key, output_file in output_files.items():
+        if key != "unwrap_stats" and output_file.exists():
             output_file.unlink()
 
 
@@ -220,32 +220,6 @@ def test_parse_entry_assertions():
 
     with pytest.raises(AssertionError, match="IMU data size mismatch"):
         parse_imu_entry(b"1" * 20)  # Too long
-
-
-def test_unwrap_micros_no_wrapping():
-    """Test unwrap_micros with no wrapping."""
-    micros = [1000, 2000, 3000, 4000]
-    unwrapped = unwrap_micros(micros)
-    assert unwrapped == [1000, 2000, 3000, 4000]
-
-
-def test_unwrap_micros_with_wrapping():
-    """Test unwrap_micros with wrapping at uint32_t boundary."""
-    UINT32_MAX = 2**32
-    # Simulate wrap: values go from near max to near zero
-    micros = [UINT32_MAX - 1000, UINT32_MAX - 500, 100, 500]
-    unwrapped = unwrap_micros(micros)
-
-    # After unwrapping, values should be monotonic
-    assert unwrapped[0] == UINT32_MAX - 1000
-    assert unwrapped[1] == UINT32_MAX - 500
-    assert unwrapped[2] == UINT32_MAX + 100
-    assert unwrapped[3] == UINT32_MAX + 500
-
-
-def test_unwrap_micros_empty():
-    """Test unwrap_micros with empty list."""
-    assert unwrap_micros([]) == []
 
 
 def test_compute_pps_regression():
@@ -348,3 +322,94 @@ GNSS update rate (Hz): 10
         assert imu_data[i].gyr_x == 50 + i
         assert imu_data[i].gyr_y == 100 + i
         assert imu_data[i].gyr_z == 150 + i
+
+
+def test_unwrap_array_no_wrapping():
+    """Test unwrap_array with no wrapping or jumps."""
+    values = np.array([1000, 2000, 3000, 4000])
+    unwrapped, wraps, jumps = unwrap_array(values, max_value=2**32)
+    
+    assert np.array_equal(unwrapped, values)
+    assert wraps is None
+    assert jumps is None
+
+
+def test_unwrap_array_with_wrapping():
+    """Test unwrap_array with wrapping at uint32_t boundary."""
+    UINT32_MAX = 2**32
+    # Simulate wrap: values go from near max to near zero
+    values = np.array([UINT32_MAX - 1000, UINT32_MAX - 500, 100, 500])
+    unwrapped, wraps, jumps = unwrap_array(values, max_value=UINT32_MAX)
+    
+    # After unwrapping, values should be monotonic
+    assert unwrapped[0] == UINT32_MAX - 1000
+    assert unwrapped[1] == UINT32_MAX - 500
+    assert unwrapped[2] == UINT32_MAX + 100
+    assert unwrapped[3] == UINT32_MAX + 500
+    
+    # Should detect one wrap at index 2
+    assert wraps is not None
+    assert len(wraps) == 1
+    assert wraps[0] == 2
+    
+    # No jumps (monotonic after unwrapping)
+    assert jumps is None
+
+
+def test_unwrap_array_with_negative_jump():
+    """Test unwrap_array detecting negative jumps (backwards in time)."""
+    values = np.array([1000, 2000, 3000, 2500, 4000])  # value[3] goes backwards
+    unwrapped, wraps, jumps = unwrap_array(values, max_value=2**32)
+    
+    # No wraps (no large backwards jumps)
+    assert wraps is None
+    
+    # Should detect negative jump at index 3
+    assert jumps is not None
+    assert 3 in jumps
+
+
+def test_unwrap_array_with_large_forward_jump():
+    """Test unwrap_array detecting large forward jumps."""
+    UINT32_MAX = 2**32
+    jump_threshold = 0.1 * UINT32_MAX
+    
+    values = np.array([1000, 2000, 3000, 3000 + jump_threshold + 1000])
+    unwrapped, wraps, jumps = unwrap_array(values, max_value=UINT32_MAX)
+    
+    # No wraps
+    assert wraps is None
+    
+    # Should detect large jump at index 3
+    assert jumps is not None
+    assert 3 in jumps
+
+
+def test_unwrap_array_counter():
+    """Test unwrap_array with uint16 counter and jump detection."""
+    UINT16_MAX = 2**16
+
+    # Counter wraps at 65536 and has one missed sample (jump by 2 instead of 1)
+    values = np.array([65534, 65535, 0, 1, 3, 4])  # Jump at index 4 (1->3, diff=2 > threshold 1)
+    unwrapped, wraps, jumps = unwrap_array(
+        values, max_value=UINT16_MAX, jump_threshold=1
+    )
+
+    # Should detect wrap at index 2
+    assert wraps is not None
+    assert 2 in wraps
+
+    # After unwrapping: [65534, 65535, 65536, 65537, 65539, 65540]
+    # Should detect jump at index 4 (diff=2, exceeds threshold of 1)
+    assert jumps is not None
+    assert 4 in jumps
+
+
+def test_unwrap_array_empty():
+    """Test unwrap_array with empty array."""
+    values = np.array([])
+    unwrapped, wraps, jumps = unwrap_array(values, max_value=2**32)
+    
+    assert len(unwrapped) == 0
+    assert wraps is None
+    assert jumps is None

@@ -35,6 +35,9 @@ def main(path: Path) -> None:
     # Decode the file (no ASCII plots)
     output_files = decode_file(path, show_plots=False)
 
+    # Extract unwrap stats
+    unwrap_stats = output_files.get("unwrap_stats", None)
+
     # Load the decoded data
     logger.info("Loading decoded data for visualization...")
     pps_data = np.load(output_files["pps"], allow_pickle=True)
@@ -62,7 +65,7 @@ def main(path: Path) -> None:
     plot_pps_mismatch(pps_data)
 
     # Plot 6: IMU counter vs entry number
-    plot_imu_counter(imu_data)
+    plot_imu_counter(imu_data, unwrap_stats)
 
     logger.success("All plots created! Close plot windows to exit.")
     plt.show()
@@ -290,7 +293,7 @@ def plot_time_differences(imu_data: np.ndarray, gnss_data: np.ndarray) -> None:
     logger.info("Created time differences plot")
 
 
-def plot_imu_counter(imu_data: np.ndarray) -> None:
+def plot_imu_counter(imu_data: np.ndarray, unwrap_stats: dict | None = None) -> None:
     """Plot IMU counter as a function of entry number.
 
     Creates two subplots:
@@ -299,38 +302,35 @@ def plot_imu_counter(imu_data: np.ndarray) -> None:
 
     Args:
         imu_data: Array of IMUReading objects
+        unwrap_stats: Optional unwrap statistics from decoder
     """
     if len(imu_data) == 0:
         logger.warning("No IMU data to plot")
         return
 
-    # Extract counter values
+    # Extract counter values (raw and unwrapped)
     counters = np.array([imu.counter for imu in imu_data], dtype=np.int64)
+    unwrapped_counters = np.array([imu.counter_unwrapped for imu in imu_data], dtype=np.int64)
     entry_numbers = np.arange(len(imu_data))
 
-    # Unwrap counter: detect uint16 wrapping
-    UINT16_MAX = 65536
-    WRAP_THRESHOLD = 0.8 * UINT16_MAX
-    unwrapped_counters = np.zeros_like(counters, dtype=np.int64)
-    unwrapped_counters[0] = counters[0]
-    wrap_offset = 0
-
-    for i in range(1, len(counters)):
-        diff = counters[i] - counters[i-1]
-        # Detect wrap: large negative jump
-        if diff <= -WRAP_THRESHOLD:
-            wrap_offset += UINT16_MAX
-        unwrapped_counters[i] = counters[i] + wrap_offset
-
-    # Detect anomalies: counter increment > 1
-    anomaly_indices = []
-    for i in range(1, len(unwrapped_counters)):
-        increment = unwrapped_counters[i] - unwrapped_counters[i-1]
-        if increment > 1:
-            anomaly_indices.append(i)
-
-    num_anomalies = len(anomaly_indices)
-    num_wraps = wrap_offset // UINT16_MAX
+    # Get wrap and jump counts from unwrap_stats if available
+    if unwrap_stats and "IMU" in unwrap_stats and "counter" in unwrap_stats["IMU"]:
+        num_wraps = unwrap_stats["IMU"]["counter"]["wraps"]
+        jump_indices_array = unwrap_stats["IMU"]["counter"].get("jump_indices")
+        anomaly_indices = list(jump_indices_array) if jump_indices_array is not None else []
+        num_anomalies = len(anomaly_indices)
+    else:
+        # Fallback: detect anomalies from unwrapped data
+        num_wraps = 0
+        anomaly_indices = []
+        for i in range(1, len(unwrapped_counters)):
+            increment = unwrapped_counters[i] - unwrapped_counters[i-1]
+            if increment != 1:
+                anomaly_indices.append(i)
+                # Detect wraps: large jumps in unwrapped (but this is approximate)
+                if increment > 60000:
+                    num_wraps += 1
+        num_anomalies = len(anomaly_indices)
 
     logger.info(f"IMU counter: {num_wraps} wraps detected, "
                 f"{num_anomalies} anomalous samples (missed data)")
@@ -348,16 +348,16 @@ def plot_imu_counter(imu_data: np.ndarray) -> None:
     axes[0].legend()
 
     # Right plot: unwrapped counter with anomalies
-    axes[1].plot(entry_numbers, unwrapped_counters, "b-", linewidth=0.8, 
+    axes[1].plot(entry_numbers, unwrapped_counters, "b-", linewidth=0.8,
                  label="Unwrapped Counter")
-    
+
     # Highlight anomalies with red crosses
     if anomaly_indices:
-        axes[1].plot(entry_numbers[anomaly_indices], 
+        axes[1].plot(entry_numbers[anomaly_indices],
                      unwrapped_counters[anomaly_indices],
-                     "rx", markersize=8, markeredgewidth=2, 
+                     "rx", markersize=8, markeredgewidth=2,
                      label=f"Anomalies ({num_anomalies})")
-    
+
     axes[1].set_xlabel("Entry Number")
     axes[1].set_ylabel("Unwrapped Counter Value")
     axes[1].set_title(f"Unwrapped Counter: {num_wraps} wraps, {num_anomalies} jumps (anomalous)")

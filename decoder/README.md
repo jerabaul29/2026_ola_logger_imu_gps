@@ -144,15 +144,17 @@ For each input file `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.dat`, the decoder gener
 
 ## Data Structures
 
-All data structures include timestamps derived from linear regression between PPS and GNSS data for accurate absolute time synchronization.
+All data structures include timestamps derived from linear regression between PPS and GNSS data for accurate absolute time synchronization. Additionally, all potentially wrapping values (micros_reading, counter) are unwrapped to handle overflow and provide monotonic values.
 
 ### PPSFix
-- `micros_reading`: Microseconds timestamp from microcontroller (uint32_t)
+- `micros_reading`: Microseconds timestamp from microcontroller (uint32_t, raw)
+- `micros_reading_unwrapped`: Unwrapped microseconds timestamp (handles uint32_t overflow)
 - `utc_timestamp_from_pps_regression`: UTC timestamp (float, seconds since epoch) computed from linear regression
 - `datetime_timestamp_from_pps_regression`: UTC datetime object (timezone-aware) derived from the regression
 
 ### GNSSReading
-- `micros_reading`: Microseconds timestamp from microcontroller
+- `micros_reading`: Microseconds timestamp from microcontroller (raw)
+- `micros_reading_unwrapped`: Unwrapped microseconds timestamp (handles uint32_t overflow)
 - `latitude`: Latitude (raw scaled integer, divide by 1e7 for degrees)
 - `longitude`: Longitude (raw scaled integer, divide by 1e7 for degrees)
 - `posix_timestamp`: POSIX time from GNSS receiver (seconds)
@@ -171,8 +173,10 @@ All data structures include timestamps derived from linear regression between PP
 - `datetime_timestamp_from_pps_regression`: UTC datetime from regression (timezone-aware)
 
 ### IMUReading
-- `micros_reading`: Microseconds timestamp from microcontroller
-- `counter`: Sample counter (uint16) incremented for each IMU sample
+- `micros_reading`: Microseconds timestamp from microcontroller (raw)
+- `micros_reading_unwrapped`: Unwrapped microseconds timestamp (handles uint32_t overflow)
+- `counter`: Sample counter (uint16, raw) incremented for each IMU sample
+- `counter_unwrapped`: Unwrapped sample counter (handles uint16_t overflow at 65536)
 - `acc_x`, `acc_y`, `acc_z`: Raw accelerometer readings (int16)
 - `gyr_x`, `gyr_y`, `gyr_z`: Raw gyroscope readings (int16)
 - `acc_x_mg`, `acc_y_mg`, `acc_z_mg`: Scaled acceleration in milli-g (float, mg), where 1g ≈ 9.81 m/s²
@@ -185,11 +189,26 @@ All data structures include timestamps derived from linear regression between PP
 The decoder automatically performs linear regression between PPS (pulse-per-second) events and GNSS timestamps to create an accurate mapping from microcontroller microsecond timestamps to absolute UTC time. This process:
 
 1. **Unwraps** the uint32_t microsecond timestamps to handle overflow at 2³² microseconds (~71.6 minutes)
-2. **Matches** each PPS event with the nearest GNSS timestamp to establish reference points
-3. **Performs** linear regression to compute a high-precision mapping: `utc_time = slope × micros + intercept`
-4. **Applies** this mapping to all entries (PPS, GNSS, and IMU) to add synchronized UTC timestamps
+2. **Detects anomalies**: Identifies both wrapping events and anomalous jumps in timestamps and counters
+3. **Matches** each PPS event with the nearest GNSS timestamp to establish reference points
+4. **Performs** linear regression to compute a high-precision mapping: `utc_time = slope × micros + intercept`
+5. **Applies** this mapping to all entries (PPS, GNSS, and IMU) to add synchronized UTC timestamps
 
 The regression typically achieves R² > 0.999999, providing microsecond-accurate absolute timestamps for all sensor data. Use `datetime_timestamp_from_pps_regression` for convenient timezone-aware datetime objects, or `utc_timestamp_from_pps_regression` for numerical calculations.
+
+### Unwrapping and Jump Detection
+
+All potentially wrapping values are automatically unwrapped:
+
+- **micros_reading** (uint32_t): Unwrapped to handle overflow at 2³² (~71.6 minutes)
+  - Wrap threshold: 75% of max value (large backwards jumps)
+  - Jump threshold: 10% of max value (anomalous forward or any backward jumps)
+
+- **counter** (uint16_t, IMU only): Unwrapped to handle overflow at 65536
+  - Wrap threshold: 75% of 65536
+  - Jump threshold: 1 (detects ANY missed samples where counter doesn't increment by exactly 1)
+
+The decoder reports statistics on detected wraps and jumps for each data type. File duration calculations exclude entries with anomalous jumps to provide accurate timing information. Access unwrapped values via `micros_reading_unwrapped` and `counter_unwrapped` fields in each dataclass entry.
 
 ## File Format
 
