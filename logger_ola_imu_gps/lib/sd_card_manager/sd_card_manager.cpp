@@ -40,13 +40,14 @@ void microSDPowerOff()
 }
 
 void SD_Card_Manager::generate_filename() {
-    // Generate filename in format: DATA_BOOT_XXXX_TIME_YYMMDDTHHMMSS.dat
+    // Generate filename in format: BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYMMDDTHHMMSS.dat
     uint32_t boot_count = boot_counter_instance.get_boot_number();
     common_working_posix_timestamp = board_time_manager.get_posix_timestamp();
     common_working_struct_YMDHMS = YMDHMS_from_posix_timestamp(common_working_posix_timestamp);
         
     snprintf(filename_buffer, sizeof(filename_buffer),
-             "DATA_BOOT_%04u_TIME_%02u%02u%02uT%02u%02u%02u.dat",
+             "BOOT_%06u/DATA_BOOT_%06u_TIME_%02u%02u%02uT%02u%02u%02u.dat",
+             boot_count,
              boot_count,
              common_working_struct_YMDHMS.year,
              common_working_struct_YMDHMS.month,
@@ -130,6 +131,27 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes) {
     }
     
     generate_filename();
+    
+    // Extract folder name from filename_buffer (format: BOOT_XXXXXX/DATA_BOOT_...)
+    char folder_name[16];  // "BOOT_XXXXXX" + null terminator
+    char* slash_pos = strchr(filename_buffer, '/');
+    if (slash_pos != nullptr) {
+        size_t folder_len = slash_pos - filename_buffer;
+        strncpy(folder_name, filename_buffer, folder_len);
+        folder_name[folder_len] = '\0';
+        
+        // Check if folder exists, create if it doesn't
+        if (!sd_card.exists(folder_name)) {
+            SERIAL_USB->print(F("Creating folder: "));
+            SERIAL_USB->println(folder_name);
+            if (!sd_card.mkdir(folder_name)) {
+                SERIAL_USB->println(F("ERROR: Failed to create folder!"));
+                return false;
+            }
+            SERIAL_USB->println(F("Folder created successfully"));
+        }
+    }
+    
     SERIAL_USB->print(F("Opening file: "));
     SERIAL_USB->println(filename_buffer);
     

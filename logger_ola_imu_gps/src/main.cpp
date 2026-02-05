@@ -268,8 +268,8 @@ void isr_PPS() {
 void setup() {
   /////////////////////////////////////////////////////////////////////////////////
   // Initialize watchdog timer
-  // Set WDT to 1 Hz, interrupt at 128 ticks, reset at 128 ticks; slow as pre allocate can take quite a while it seems
-  wdt.configure(WDT_1HZ, 128, 128);
+  // Set WDT to 1 Hz, interrupt at 64 ticks, reset at 128 ticks; slow as pre allocate can take quite a while it seems
+  wdt.configure(WDT_1HZ, 64, 64);
   wdt.start();
 
   enableBurstMode();

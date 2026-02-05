@@ -108,7 +108,7 @@ private:
     RingBuf<FsFile, SD_RINGBUF_SIZE> ring_buf;  ///< Ring buffer for multi-block writes
     bool sd_initialized = false; ///< True if SD card successfully initialized
     bool file_open = false;     ///< True if a file is currently open
-    char filename_buffer[48];  ///< filename is DATA_BOOT_XXXX_TIME_YYMMDDTHHMMSS.dat
+    char filename_buffer[64];  ///< filename is BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYMMDDTHHMMSS.dat
 };
 
 /// Global SD card manager instance
