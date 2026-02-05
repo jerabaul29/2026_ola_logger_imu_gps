@@ -22,7 +22,8 @@ void microSDPowerOn()
     SERIAL_USB->println(F("Turning SD card power ON..."));
     pinMode(SD_PWR, OUTPUT);
     digitalWrite(SD_PWR, LOW);
-    delay(250);  // Wait for SD card to power up
+    delay(1000);  // Wait for SD card to power up
+    wdt.restart();
 }
 
 /**
@@ -160,6 +161,8 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes) {
         SERIAL_USB->println(F("WARNING: Removing old file..."));
         sd_card.remove(filename_buffer);
     }
+    delay(500);
+    wdt.restart();
     
     if (!sd_file.open(filename_buffer, O_RDWR | O_CREAT)) {
         SERIAL_USB->println(F("ERROR: Failed to open test file!"));
@@ -169,6 +172,8 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes) {
         SERIAL_USB->println(sd_card.card()->errorData(), HEX);
         return false;
     }
+    delay(1000);
+    wdt.restart();
     
     file_open = true;
     SERIAL_USB->println(F("File opened successfully"));
@@ -177,6 +182,8 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes) {
     if (!sd_file.truncate(0)) {
         SERIAL_USB->println(F("WARNING: Failed to truncate file"));
     }
+    delay(500);
+    wdt.restart();
     
     // Preallocate if size specified
     if (size_bytes > 0) {
@@ -192,9 +199,13 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes) {
             sd_file.sync();  // Ensure FAT is updated
         }
     }
+    delay(500);
+    wdt.restart();
     
     // Initialize RingBuf with the opened file
     ring_buf.begin(&sd_file);
+    delay(500);
+    wdt.restart();
     
     return true;
 }
@@ -208,11 +219,19 @@ void SD_Card_Manager::close_and_sync_file() {
     
     // Flush all data from RingBuf to file
     ring_buf.sync();
+    delay(1000);
+    wdt.restart();
     
     sd_file.sync();
+    delay(1000);
+    wdt.restart();
+
     sd_file.close();
     file_open = false;
     SERIAL_USB->println(F("File closed"));
+    wdt.restart();
+    delay(1000);
+    wdt.restart();
 }
 
 bool SD_Card_Manager::write_buffer(const uint8_t* buffer, size_t size) {

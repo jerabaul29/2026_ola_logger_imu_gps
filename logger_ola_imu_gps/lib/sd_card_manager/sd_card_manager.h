@@ -15,6 +15,7 @@
 #include "RingBuf.h"
 #include "time_manager.h"
 #include "boot_counter.h"
+#include "watchdog_manager.h"
 
 /// RingBuf size for multi-block writes
 static constexpr size_t SD_RINGBUF_SIZE = 2 * 32 * 512;
