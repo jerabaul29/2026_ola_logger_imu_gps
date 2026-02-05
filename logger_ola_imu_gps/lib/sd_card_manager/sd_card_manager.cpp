@@ -65,7 +65,7 @@ bool SD_Card_Manager::start() {
     
     SERIAL_USB->println(F("Initializing SD card..."));
     
-    SdSpiConfig sd_config{SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(SD_SPI_MHZ)};
+    SdSpiConfig sd_config{SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(50)};
     
     if (!sd_card.begin(sd_config)) {
         SERIAL_USB->println(F("ERROR: SD card initialization failed!"));
@@ -171,6 +171,9 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes) {
         }
     }
     
+    // Initialize RingBuf with the opened file
+    ring_buf.begin(&sd_file);
+    
     return true;
 }
 
@@ -180,6 +183,10 @@ void SD_Card_Manager::close_and_sync_file() {
     }
     
     SERIAL_USB->println(F("Syncing and closing file..."));
+    
+    // Flush all data from RingBuf to file
+    ring_buf.sync();
+    
     sd_file.sync();
     sd_file.close();
     file_open = false;
@@ -193,7 +200,20 @@ bool SD_Card_Manager::write_buffer(const uint8_t* buffer, size_t size) {
     }
 
     digitalWrite(PIN_STAT_LED, HIGH);
-    size_t written = sd_file.write(buffer, size);
+    
+    // Check if we need to flush before writing new data
+    // This ensures we don't overflow the buffer
+    // Do this BEFORE writing to avoid blocking after the write
+    if (ring_buf.bytesFree() < size + 512) {
+        // Write out half the buffer to make room
+        // This performs SD writes but keeps ISR blocking minimal
+        ring_buf.writeOut(SD_RINGBUF_SIZE / 2);
+    }
+    
+    // Write to RingBuf - the write() itself only briefly disables interrupts
+    // during the counter update (a few CPU cycles)
+    size_t written = ring_buf.write(buffer, size);
+    
     digitalWrite(PIN_STAT_LED, LOW);
     return (written == size);
 }

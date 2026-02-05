@@ -12,8 +12,12 @@
 #include "firmware_configuration.h"
 #include <SPI.h>
 #include "SdFat.h"
+#include "RingBuf.h"
 #include "time_manager.h"
 #include "boot_counter.h"
+
+/// RingBuf size for multi-block writes
+static constexpr size_t SD_RINGBUF_SIZE = 2 * 32 * 512;
 
 /**
  * @class SD_Card_Manager
@@ -101,6 +105,7 @@ public:
 private:
     SdFat sd_card;              ///< SD card filesystem object
     FsFile sd_file;             ///< Currently open file object
+    RingBuf<FsFile, SD_RINGBUF_SIZE> ring_buf;  ///< Ring buffer for multi-block writes
     bool sd_initialized = false; ///< True if SD card successfully initialized
     bool file_open = false;     ///< True if a file is currently open
     char filename_buffer[48];  ///< filename is DATA_BOOT_XXXX_TIME_YYMMDDTHHMMSS.dat

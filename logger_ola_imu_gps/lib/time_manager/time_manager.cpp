@@ -7,6 +7,8 @@ volatile kiss_time_t posix_timestamp {0};
 
 TimeManager board_time_manager {};
 
+volatile bool toggle {false};
+
 //--------------------------------------------------------------------------------
 // the TimeManager class
 
@@ -31,7 +33,8 @@ static_assert(
 );
 
 TimeManager::TimeManager(): posix_is_set{false}{
-  this->setup_RTC();
+  // RTC setup must be called after CPU clock is configured (after enableBurstMode)
+  // Do not call setup_RTC() here in constructor
 };
 
 void TimeManager::set_posix_timestamp(kiss_time_t const crrt_posix_timestamp){
@@ -39,7 +42,7 @@ void TimeManager::set_posix_timestamp(kiss_time_t const crrt_posix_timestamp){
     // write and read until we get a match, see comment about uint64_t and atomicity
     while (true){
       posix_timestamp = crrt_posix_timestamp;
-      delayMicroseconds(4);
+      delayMicroseconds(2);
       if(posix_timestamp == crrt_posix_timestamp){
         break;
       }
@@ -62,7 +65,7 @@ kiss_time_t TimeManager::get_posix_timestamp(void) const {
   if constexpr (TIME_MANAGER_READ_WRITE_CHECK){
     // read until we get 2 consecutive identical values, see comment about uint64_t
     // and atomicity
-    delayMicroseconds(4);
+    delayMicroseconds(2);
     value_read = posix_timestamp;
 
     while (true){
@@ -72,7 +75,7 @@ kiss_time_t TimeManager::get_posix_timestamp(void) const {
       else {
         value_read = posix_timestamp;
       }
-      delayMicroseconds(4);
+      delayMicroseconds(2);
     }
   }
 
@@ -142,8 +145,12 @@ void TimeManager::setup_RTC(void)
 
 extern "C" void am_rtc_isr(void)
 {
-  // Clear the RTC alarm interrupt.
+  // Clear the RTC alarm interrupt FIRST to prevent double-firing
   am_hal_rtc_int_clear(AM_HAL_RTC_INT_ALM);
+  
+  // Read and clear the RTC interrupt status to ensure it's fully handled
+  uint32_t ui32Status = am_hal_rtc_int_status_get(true);
+  am_hal_rtc_int_clear(ui32Status);
 
   posix_timestamp += 1;
 }

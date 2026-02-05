@@ -33,8 +33,8 @@ SFE_UBLOX_GNSS log_GNSS;
 static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
 
 // static constexpr float ISM330DHCX_ODR_HZ = 12.5f;
-static constexpr float ISM330DHCX_ODR_HZ = 208.0f;
-// static constexpr float ISM330DHCX_ODR_HZ = 417.0f;
+// static constexpr float ISM330DHCX_ODR_HZ = 208.0f;
+static constexpr float ISM330DHCX_ODR_HZ = 417.0f;
 
 // Timer configuration
 static constexpr int TIMER_NUM = 2;
@@ -62,9 +62,9 @@ constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 10 * 1024 * 1024; // Preallo
 static constexpr char str_start_logging[] = "Log start OLA ISM330DHCX SAM-M10Q logger\n\n";
 static constexpr char str_stop_logging[] = "\n\nLog stop OLA ISM330DHCX SAM-M10Q logger\n";
 
-static constexpr size_t SIZE_DEQUE_IMU {30*( (int)ISM330DHCX_ODR_HZ)};
-static constexpr size_t SIZE_DEQUE_GNSS {30*GNSS_FREQUENCY_HZ};
-static constexpr size_t SIZE_DEQUE_PPS {30*1};
+static constexpr size_t SIZE_DEQUE_IMU {20*( (int)ISM330DHCX_ODR_HZ)};
+static constexpr size_t SIZE_DEQUE_GNSS {20*GNSS_FREQUENCY_HZ};
+static constexpr size_t SIZE_DEQUE_PPS {20*1};
 
 size_t working_deque_size {0};
 size_t max_deque_size_imu {0};
@@ -271,6 +271,12 @@ void setup() {
   // Set WDT to 1 Hz, interrupt at 128 ticks, reset at 128 ticks; slow as pre allocate can take quite a while it seems
   wdt.configure(WDT_1HZ, 128, 128);
   wdt.start();
+
+  enableBurstMode();
+  
+  // Initialize RTC AFTER burst mode is enabled
+  // This ensures timing is correctly configured for the 96MHz clock
+  board_time_manager.setup_RTC();
 
   if (ENABLE_BLINK_PWR_LED){
     blink_pwr_led(3);
@@ -737,6 +743,7 @@ void setup() {
 
         SERIAL_USB->println();
 
+        board_time_manager.print_status();
         SERIAL_USB->print(F("millis(): "));
         SERIAL_USB->print(millis());
         SERIAL_USB->print(F("; seconds since boot: "));
