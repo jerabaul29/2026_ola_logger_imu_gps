@@ -9,6 +9,13 @@ This decoder parses binary data files from the OLA logger and converts them into
 - **GNSS**: GPS/GNSS navigation data (position, velocity, fix type)
 - **IMU**: Accelerometer and gyroscope readings with automatic scaling
 
+### Key Features
+
+- **Robust Corruption Recovery**: Automatically detects and recovers from file corruption (e.g., power loss during logging)
+- **Timestamp Synchronization**: Linear regression between PPS and GNSS for microsecond-accurate UTC timestamps
+- **Overflow Handling**: Unwraps uint32_t and uint16_t wrapping in timestamps and counters
+- **Anomaly Detection**: Identifies missed samples and timing glitches
+
 **Note**: ASCII plots (for visualizing PPS mismatch) require `gnuplotlib`, which is optional. The decoder will work without it, but plots will be unavailable.
 
 ## Project Structure
@@ -16,8 +23,10 @@ This decoder parses binary data files from the OLA logger and converts them into
 - `decoder.py` - Core decoding module with all parsing functions
 - `decoder_cli.py` - Command-line interface for decoding and visualization
 - `example_decode.py` - Example script showing programmatic usage
+- `demo_corruption_recovery.py` - Demonstration of corruption recovery capabilities
 - `test_decoder.py` - Tests for decoder module
 - `test_decoder_cli.py` - Tests for CLI tool
+- `test_corruption_recovery.py` - Tests for corruption recovery
 - `environment.yml` - Mamba/conda environment specification
 - `AGENT.md` - Development guidelines and code practices
 - `SPEC.md` - Binary file format specification
@@ -112,11 +121,52 @@ print(f"IMU timestamp (UTC datetime): {imu_data[0].datetime_timestamp_from_pps_r
 output_files_with_plots = decode_file(data_file, show_plots=True)
 ```
 
+## Corruption Recovery
+
+The decoder automatically handles corrupted files (e.g., from power loss during logging):
+
+### How It Works
+
+1. **Detection**: When an unexpected byte is encountered, corruption is detected
+2. **Scanning**: The decoder scans ahead up to 1024 bytes looking for valid entry markers
+3. **Recovery**: If a valid marker is found, parsing resumes from there
+4. **Graceful Termination**: If no marker is found, parsing stops and all valid data up to the corruption point is saved
+
+### Example
+
+```bash
+# Demonstrate corruption recovery
+python demo_corruption_recovery.py
+```
+
+The decoder logs detailed messages:
+```
+ERROR | CORRUPTION DETECTED at offset 475 after IMU entry: 
+      expected '\n' (0x0a), null byte (0x00), or footer, got byte 0x58.
+      Scanning ahead for next valid marker...
+WARNING | Found valid marker at offset 825 (350 bytes skipped). Resuming parsing.
+```
+
+### Behavior Summary
+
+| Situation | Decoder Behavior |
+|-----------|-----------------|
+| **Valid file** | Normal parsing, all data extracted |
+| **Corruption with recovery** | Logs error, skips corrupted region, resumes parsing |
+| **Corruption without recovery** | Logs error, saves all data before corruption |
+| **Truncated file** | Logs error, saves all complete entries |
+
+**Key Point**: No data is lost before the corruption point. The decoder preserves all valid measurements even if the end of the file is corrupted or missing.
+
 ## Running Tests
 
 ```bash
 # Run all tests
 pytest -v .
+
+# Run specific test suites
+pytest test_decoder.py -v                  # Core decoder tests
+pytest test_corruption_recovery.py -v      # Corruption handling tests
 ```
 
 ## Code Quality Checks

@@ -131,7 +131,7 @@ try:
     print(f"  IMU entries:  {len(imu_data):,}")
     
     # Verify first IMU entry
-    print(f"\n  First IMU entry:")
+    print("\n  First IMU entry:")
     print(f"    micros:  {imu_data[0].micros_reading:,}")
     print(f"    counter: {imu_data[0].counter}")
     

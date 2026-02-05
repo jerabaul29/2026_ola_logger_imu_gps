@@ -3,8 +3,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from decoder import decode_file
-
 # %%
 
 # path_imu = "./DATA_BOOT_0055_TIME_20260120T211500_imu.npy"

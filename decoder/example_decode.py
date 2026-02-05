@@ -20,18 +20,18 @@ def print_data_sample(data, data_type: str, n: int = 10) -> None:
     if len(data) == 0:
         logger.warning(f"No {data_type} data to display")
         return
-    
+
     logger.info("")
     logger.info("=" * 80)
     logger.info(f"{data_type} DATA SAMPLE - Loaded {len(data)} entries")
     logger.info("=" * 80)
-    
+
     # Show first n entries
     n_first = min(n, len(data))
     logger.info(f"First {n_first} entries:")
     for i in range(n_first):
         logger.info(f"  [{i}] {data[i]}")
-    
+
     # Show last n entries if we have more than n entries
     if len(data) > n:
         logger.info("")
