@@ -230,11 +230,6 @@ def test_real_world_aborted_file():
         assert hasattr(imu_data[0], 'acc_x_mg')
         assert hasattr(imu_data[0], 'gyr_x_mdps')
     
-    # Verify unwrapped values exist
-    if len(imu_data) > 0:
-        assert imu_data[0].micros_reading_unwrapped is not None
-        assert imu_data[0].counter_unwrapped is not None
-    
     # Log what we recovered for visibility
     print(f"\nRecovered from aborted file {test_file}:")
     print(f"  PPS entries:  {len(pps_data):,}")
@@ -244,5 +239,5 @@ def test_real_world_aborted_file():
     
     # Clean up output files
     for key, output_file in output_files.items():
-        if key != "unwrap_stats" and isinstance(output_file, Path) and output_file.exists():
+        if isinstance(output_file, Path) and output_file.exists():
             output_file.unlink()

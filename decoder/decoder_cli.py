@@ -316,12 +316,15 @@ def plot_imu_counter(imu_data: np.ndarray, unwrap_stats: dict | None = None) -> 
     # Get wrap and jump counts from unwrap_stats if available
     if unwrap_stats and "IMU" in unwrap_stats and "counter" in unwrap_stats["IMU"]:
         num_wraps = unwrap_stats["IMU"]["counter"]["wraps"]
+        wrap_indices_array = unwrap_stats["IMU"]["counter"].get("wrap_indices")
         jump_indices_array = unwrap_stats["IMU"]["counter"].get("jump_indices")
+        wrap_indices = list(wrap_indices_array) if wrap_indices_array is not None else []
         anomaly_indices = list(jump_indices_array) if jump_indices_array is not None else []
         num_anomalies = len(anomaly_indices)
     else:
         # Fallback: detect anomalies from unwrapped data
         num_wraps = 0
+        wrap_indices = []
         anomaly_indices = []
         for i in range(1, len(unwrapped_counters)):
             increment = unwrapped_counters[i] - unwrapped_counters[i-1]
@@ -330,6 +333,7 @@ def plot_imu_counter(imu_data: np.ndarray, unwrap_stats: dict | None = None) -> 
                 # Detect wraps: large jumps in unwrapped (but this is approximate)
                 if increment > 60000:
                     num_wraps += 1
+                    wrap_indices.append(i)
         num_anomalies = len(anomaly_indices)
 
     logger.info(f"IMU counter: {num_wraps} wraps detected, "
@@ -347,9 +351,16 @@ def plot_imu_counter(imu_data: np.ndarray, unwrap_stats: dict | None = None) -> 
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
 
-    # Right plot: unwrapped counter with anomalies
+    # Right plot: unwrapped counter with wraps and anomalies
     axes[1].plot(entry_numbers, unwrapped_counters, "b-", linewidth=0.8,
                  label="Unwrapped Counter")
+
+    # Highlight wraps with green crosses
+    if wrap_indices:
+        axes[1].plot(entry_numbers[wrap_indices],
+                     unwrapped_counters[wrap_indices],
+                     "gx", markersize=10, markeredgewidth=2,
+                     label=f"Wraps ({num_wraps})")
 
     # Highlight anomalies with red crosses
     if anomaly_indices:

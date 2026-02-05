@@ -720,6 +720,11 @@ def print_summary_statistics(
                 last_micros = imu_list[last_idx].micros_reading
 
             duration_us = last_micros - first_micros
+            
+            # Handle counter wraps (if duration is negative, assume wrap occurred)
+            if duration_us < 0:
+                duration_us += 2**32  # uint32_t wrap
+            
             duration_s = duration_us / 1e6
             duration_min = duration_s / 60.0
 
@@ -792,6 +797,410 @@ def scan_for_next_valid_marker(
     return earliest_pos
 
 
+def handle_junk_bytes(
+    content: bytes,
+    idx: int,
+    next_byte: int,
+    junk_start: int,
+    entry_type: str,
+    markers: tuple[bytes, ...],
+    footer_marker: bytes,
+    pps_list: list,
+    gnss_list: list,
+    imu_list: list,
+) -> tuple[int, bool]:
+    """Handle junk bytes after an entry.
+    
+    Args:
+        content: Full file content
+        idx: Current index after entry
+        next_byte: The unexpected byte found
+        junk_start: Offset where junk started
+        entry_type: Type of entry ("PPS", "GNSS", "IMU")
+        markers: Valid entry markers for recovery
+        footer_marker: Footer marker bytes
+        pps_list, gnss_list, imu_list: Current parsed entries
+        
+    Returns:
+        Tuple of (new_idx, should_break)
+        - new_idx: Updated index position
+        - should_break: Whether to break from parsing loop
+    """
+    junk_bytes = []
+    
+    # Skip junk bytes until we find a valid marker
+    while idx < len(content):
+        b = content[idx]
+        if b == ord(b'\n') or footer_marker in content[idx:idx+20]:
+            # Found valid marker, stop skipping
+            break
+        junk_bytes.append(b)
+        idx += 1
+        
+        # Safety: don't skip more than a reasonable amount
+        if len(junk_bytes) >= CORRUPTION_SCAN_BYTES:
+            # Too much junk - treat as serious corruption
+            logger.warning(
+                f"Unexpected byte 0x{next_byte:02x} at offset {junk_start} after {entry_type} entry "
+                f"(>{CORRUPTION_SCAN_BYTES} junk bytes)"
+            )
+            logger.error("Scanning ahead for valid marker...")
+            
+            # Scan ahead for next valid entry
+            next_marker_idx = scan_for_next_valid_marker(content, idx, markers)
+            
+            if next_marker_idx is not None:
+                bytes_skipped = next_marker_idx - junk_start
+                logger.info(
+                    f"Recovered at offset {next_marker_idx} ({bytes_skipped} bytes skipped)"
+                )
+                return next_marker_idx, False
+            else:
+                logger.error(
+                    f"Recovery failed. Parsed {len(pps_list)} PPS, "
+                    f"{len(gnss_list)} GNSS, {len(imu_list)} IMU before corruption"
+                )
+                return idx, True
+    
+    # Successfully skipped small amount of junk
+    if 0 < len(junk_bytes) < CORRUPTION_SCAN_BYTES:
+        logger.warning(
+            f"Skipped {len(junk_bytes)} junk byte(s) at offset {junk_start} after {entry_type} "
+            f"(first: 0x{junk_bytes[0]:02x})"
+        )
+    
+    return idx, False
+
+
+def process_pps_entry(
+    content: bytes,
+    idx: int,
+    pps_list: list,
+    gnss_list: list,
+    imu_list: list,
+    pps_marker: bytes,
+    gps_marker: bytes,
+    imu_marker: bytes,
+    footer_marker: bytes,
+    pps_struct_size: int,
+) -> tuple[int, bool]:
+    """Process a single PPS entry.
+    
+    Returns:
+        Tuple of (new_idx, should_break)
+    """
+    # Check we have enough bytes
+    line_end = idx + PPS_LINE_SIZE
+    if line_end > len(content):
+        logger.warning(
+            f"Incomplete PPS entry at offset {idx}: "
+            f"need {PPS_LINE_SIZE} bytes, only {len(content) - idx} available"
+        )
+        logger.error(
+            f"File truncated. Parsed {len(pps_list)} PPS, "
+            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before truncation"
+        )
+        return idx, True
+    
+    # Parse entry
+    idx += 4
+    pps_data = content[idx : idx + pps_struct_size]
+    try:
+        pps_entry = parse_pps_entry(pps_data)
+        pps_list.append(pps_entry)
+    except (struct.error, AssertionError) as e:
+        logger.warning(f"Failed to parse PPS entry at offset {idx}: {e}")
+        logger.error(f"Parsing aborted (data length={len(pps_data)}, expected={pps_struct_size})")
+        raise
+    idx += pps_struct_size
+    
+    # Check next byte is valid
+    if idx < len(content):
+        next_byte = content[idx]
+        if next_byte == ord(b'\n') or footer_marker in content[idx:idx+20]:
+            return idx, False
+        else:
+            # Handle junk bytes
+            new_idx, should_break = handle_junk_bytes(
+                content, idx, next_byte, idx, "PPS",
+                (pps_marker, gps_marker, imu_marker, footer_marker),
+                footer_marker, pps_list, gnss_list, imu_list
+            )
+            return new_idx, should_break
+    
+    return idx, False
+
+
+def process_gnss_entry(
+    content: bytes,
+    idx: int,
+    pps_list: list,
+    gnss_list: list,
+    imu_list: list,
+    pps_marker: bytes,
+    gps_marker: bytes,
+    imu_marker: bytes,
+    footer_marker: bytes,
+    gps_struct_size: int,
+) -> tuple[int, bool]:
+    """Process a single GNSS entry.
+    
+    Returns:
+        Tuple of (new_idx, should_break)
+    """
+    # Check we have enough bytes
+    line_end = idx + GPS_LINE_SIZE
+    if line_end > len(content):
+        logger.warning(
+            f"Incomplete GNSS entry at offset {idx}: "
+            f"need {GPS_LINE_SIZE} bytes, only {len(content) - idx} available"
+        )
+        logger.error(
+            f"File truncated. Parsed {len(pps_list)} PPS, "
+            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before truncation"
+        )
+        return idx, True
+    
+    # Parse entry
+    idx += 4
+    gnss_data = content[idx : idx + gps_struct_size]
+    try:
+        gnss_entry = parse_gnss_entry(gnss_data)
+        gnss_list.append(gnss_entry)
+    except (struct.error, AssertionError) as e:
+        logger.warning(f"Failed to parse GNSS entry at offset {idx}: {e}")
+        logger.error(f"Parsing aborted (data length={len(gnss_data)}, expected={gps_struct_size})")
+        raise
+    idx += gps_struct_size
+    
+    # Check next byte is valid
+    if idx < len(content):
+        next_byte = content[idx]
+        if next_byte == ord(b'\n') or footer_marker in content[idx:idx+20]:
+            return idx, False
+        else:
+            # Handle junk bytes
+            new_idx, should_break = handle_junk_bytes(
+                content, idx, next_byte, idx, "GNSS",
+                (pps_marker, gps_marker, imu_marker, footer_marker),
+                footer_marker, pps_list, gnss_list, imu_list
+            )
+            return new_idx, should_break
+    
+    return idx, False
+
+
+def process_imu_entry(
+    content: bytes,
+    idx: int,
+    pps_list: list,
+    gnss_list: list,
+    imu_list: list,
+    pps_marker: bytes,
+    gps_marker: bytes,
+    imu_marker: bytes,
+    footer_marker: bytes,
+    imu_struct_size: int,
+    acc_sensitivity: float,
+    gyr_sensitivity: float,
+) -> tuple[int, bool]:
+    """Process a single IMU entry.
+    
+    Returns:
+        Tuple of (new_idx, should_break)
+    """
+    # Check we have enough bytes
+    line_end = idx + IMU_LINE_SIZE
+    if line_end > len(content):
+        logger.warning(
+            f"Incomplete IMU entry at offset {idx}: "
+            f"need {IMU_LINE_SIZE} bytes, only {len(content) - idx} available"
+        )
+        logger.error(
+            f"File truncated. Parsed {len(pps_list)} PPS, "
+            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before truncation"
+        )
+        return idx, True
+    
+    # Parse entry
+    idx += 4
+    imu_data = content[idx : idx + imu_struct_size]
+    try:
+        imu_entry = parse_imu_entry(imu_data, acc_sensitivity, gyr_sensitivity)
+        imu_list.append(imu_entry)
+    except (struct.error, AssertionError) as e:
+        logger.warning(f"Failed to parse IMU entry at offset {idx}: {e}")
+        logger.error(f"Parsing aborted (data length={len(imu_data)}, expected={imu_struct_size})")
+        raise
+    idx += imu_struct_size
+    
+    # Skip padding bytes
+    idx += IMU_PADDING
+    
+    # Check next byte is valid
+    if idx < len(content):
+        next_byte = content[idx]
+        if next_byte == ord(b'\n') or footer_marker in content[idx:idx+20]:
+            return idx, False
+        else:
+            # Handle junk bytes
+            new_idx, should_break = handle_junk_bytes(
+                content, idx, next_byte, idx, "IMU",
+                (pps_marker, gps_marker, imu_marker, footer_marker),
+                footer_marker, pps_list, gnss_list, imu_list
+            )
+            return new_idx, should_break
+    
+    return idx, False
+
+
+def parse_binary_content(
+    content: bytes,
+    header_info: dict,
+    pps_marker: bytes,
+    gps_marker: bytes,
+    imu_marker: bytes,
+    footer_marker: bytes,
+) -> tuple[list, list, list]:
+    """Parse binary content and extract all PPS, GNSS, and IMU entries.
+    
+    Args:
+        content: Full file content as bytes
+        header_info: Parsed header information
+        pps_marker, gps_marker, imu_marker, footer_marker: Entry markers
+        
+    Returns:
+        Tuple of (pps_list, gnss_list, imu_list)
+    """
+    acc_sensitivity = header_info.get("acc_sensitivity", 0.061)
+    gyr_sensitivity = header_info.get("gyr_sensitivity", 4.375)
+    
+    pps_struct_size = PPS_STRUCT_SIZE
+    gps_struct_size = GPS_STRUCT_SIZE
+    imu_struct_size = IMU_STRUCT_SIZE
+    
+    pps_list = []
+    gnss_list = []
+    imu_list = []
+    
+    start_offset = 0  # Track bytes parsed
+    idx = 0
+    while idx < len(content):
+        if content[idx : idx + 4] == pps_marker:
+            idx, should_break = process_pps_entry(
+                content, idx, pps_list, gnss_list, imu_list,
+                pps_marker, gps_marker, imu_marker, footer_marker,
+                pps_struct_size
+            )
+            if should_break:
+                break
+                
+        elif content[idx : idx + 4] == gps_marker:
+            idx, should_break = process_gnss_entry(
+                content, idx, pps_list, gnss_list, imu_list,
+                pps_marker, gps_marker, imu_marker, footer_marker,
+                gps_struct_size
+            )
+            if should_break:
+                break
+                
+        elif content[idx : idx + 4] == imu_marker:
+            idx, should_break = process_imu_entry(
+                content, idx, pps_list, gnss_list, imu_list,
+                pps_marker, gps_marker, imu_marker, footer_marker,
+                imu_struct_size, acc_sensitivity, gyr_sensitivity
+            )
+            if should_break:
+                break
+                
+        elif footer_marker in content[idx : idx + len(footer_marker) + 10]:
+            logger.info("Found footer marker, stopping parsing")
+            break
+        else:
+            idx += 1
+    
+    # Check if file ended properly
+    footer_found = footer_marker in content[max(0, idx - 100) : idx + 100]
+    
+    if not footer_found and idx >= len(content):
+        logger.warning(f"Missing footer at end of file (byte {len(content)})")
+        logger.error(
+            f"File incomplete. Parsed {len(pps_list)} PPS, "
+            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before EOF"
+        )
+    elif not footer_found and idx < len(content):
+        remaining_bytes = len(content) - idx
+        logger.warning(
+            f"Parsing stopped at byte {idx} ({remaining_bytes} bytes remaining, "
+            f"{remaining_bytes / len(content) * 100:.1f}% of file unprocessed)"
+        )
+        logger.error(
+            f"Unrecoverable corruption. Parsed {len(pps_list)} PPS, "
+            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU before corruption"
+        )
+    
+    # Log final parse statistics
+    bytes_parsed = idx - start_offset
+    total_entries = len(pps_list) + len(gnss_list) + len(imu_list)
+    
+    logger.info(f"Parsed {len(pps_list)} PPS, {len(gnss_list)} GNSS, {len(imu_list)} IMU entries")
+    logger.info(f"Processed {bytes_parsed:,} bytes ({bytes_parsed / len(content) * 100:.1f}% of file)")
+    if total_entries > 0:
+        logger.info(f"Average {bytes_parsed / total_entries:.1f} bytes per entry")
+    
+    return pps_list, gnss_list, imu_list
+
+
+
+def save_decoded_data(
+    pps_list: list,
+    gnss_list: list,
+    imu_list: list,
+    output_dir: Path,
+    base_name: str,
+    unwrap_stats: dict | None = None,
+) -> dict[str, Path]:
+    """Save decoded data to numpy files.
+    
+    Args:
+        pps_list, gnss_list, imu_list: Parsed data lists
+        output_dir: Directory to save files
+        base_name: Base name for output files
+        unwrap_stats: Optional unwrap statistics to include in return
+        
+    Returns:
+        Dictionary with keys:
+        - "pps": Path to PPS file
+        - "gnss": Path to GNSS file
+        - "imu": Path to IMU file
+        - "unwrap_stats": Unwrap statistics (if provided)
+    """
+    output_files = {}
+    
+    pps_array = np.array(pps_list, dtype=object)
+    pps_file = output_dir / f"{base_name}_pps.npy"
+    np.save(pps_file, pps_array)
+    output_files["pps"] = pps_file
+    logger.info(f"Saved PPS data to {pps_file}")
+    
+    gnss_array = np.array(gnss_list, dtype=object)
+    gnss_file = output_dir / f"{base_name}_gnss.npy"
+    np.save(gnss_file, gnss_array)
+    output_files["gnss"] = gnss_file
+    logger.info(f"Saved GNSS data to {gnss_file}")
+    
+    imu_array = np.array(imu_list, dtype=object)
+    imu_file = output_dir / f"{base_name}_imu.npy"
+    np.save(imu_file, imu_array)
+    output_files["imu"] = imu_file
+    logger.info(f"Saved IMU data to {imu_file}")
+    
+    if unwrap_stats is not None:
+        output_files["unwrap_stats"] = unwrap_stats
+    
+    return output_files
+
+
 def decode_file(
     input_file: Path,
     output_dir: Path | None = None,
@@ -803,26 +1212,21 @@ def decode_file(
     pps_struct_size: int = PPS_STRUCT_SIZE,
     gps_struct_size: int = GPS_STRUCT_SIZE,
     imu_struct_size: int = IMU_STRUCT_SIZE,
-) -> dict[str, Path | dict[str, dict[str, Any]]]:
+) -> dict[str, Path]:
     """Decode a single data file and save to numpy arrays.
 
     This function performs the complete decoding pipeline:
     1. Parses file header to extract sensor sensitivities
     2. Scans binary file for PPS, GNSS, and IMU entries
-    3. Unwraps potentially wrapping values (micros_reading, counter)
-    4. Detects anomalous jumps in timestamps and counters
-    5. Computes linear regression from PPS+GNSS to get UTC timestamps
-    6. Applies regression to all entries for synchronized timestamps
-    7. Saves decoded data to .npy files
+    3. Computes linear regression from PPS+GNSS to get UTC timestamps
+    4. Applies regression to all entries for synchronized timestamps
+    5. Saves decoded data to .npy files
 
     Args:
         input_file: Path to input data file
         output_dir: Directory to save output files (defaults to same as input)
         show_plots: If True, display ASCII plots (e.g., PPS mismatch plot)
-        pps_marker: Marker bytes for PPS entries (default: b"\\nPPS")
-        gps_marker: Marker bytes for GPS entries (default: b"\\nGPS")
-        imu_marker: Marker bytes for IMU entries (default: b"\\nIMU")
-        footer_marker: Marker bytes for footer (default: b"Log stop OLA")
+        pps_marker, gps_marker, imu_marker, footer_marker: Entry markers
         pps_struct_size: Size of PPS struct in bytes (default: 4)
         gps_struct_size: Size of GPS struct in bytes (default: 36)
         imu_struct_size: Size of IMU struct in bytes (default: 18)
@@ -832,7 +1236,6 @@ def decode_file(
         - "pps": Path to PPS .npy file
         - "gnss": Path to GNSS .npy file
         - "imu": Path to IMU .npy file
-        - "unwrap_stats": Dictionary of unwrap/jump statistics
 
     Raises:
         AssertionError: If binary data structure doesn't match expected format
@@ -845,304 +1248,35 @@ def decode_file(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     header_info = parse_header(input_file, markers=(pps_marker, gps_marker, imu_marker))
-    acc_sensitivity = header_info.get("acc_sensitivity", 0.061)
-    gyr_sensitivity = header_info.get("gyr_sensitivity", 4.375)
-
-    pps_list = []
-    gnss_list = []
-    imu_list = []
 
     with open(input_file, "rb") as f:
         content = f.read()
 
-    idx = 0
-    while idx < len(content):
-        if content[idx : idx + 4] == pps_marker:
-            # Check we have enough bytes for the full line
-            line_end = idx + PPS_LINE_SIZE
-            if line_end > len(content):
-                logger.warning(
-                    f"Incomplete PPS entry at offset {idx}: "
-                    f"need {PPS_LINE_SIZE} bytes, only {len(content) - idx} available"
-                )
-                logger.error(
-                    f"File truncated. Parsed {len(pps_list)} PPS, "
-                    f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before truncation"
-                )
-                break
-
-            idx += 4
-            pps_data = content[idx : idx + pps_struct_size]
-            try:
-                pps_entry = parse_pps_entry(pps_data)
-                pps_list.append(pps_entry)
-            except (struct.error, AssertionError) as e:
-                logger.warning(
-                    f"Failed to parse PPS entry at offset {idx}: {e}"
-                )
-                logger.error(
-                    f"Parsing aborted (data length={len(pps_data)}, expected={pps_struct_size})"
-                )
-                raise
-            idx += pps_struct_size
-
-            # Check next byte is \n (start of next entry) or footer
-            if idx < len(content):
-                next_byte = content[idx]
-                if next_byte == ord(b'\n') or footer_marker in content[idx:idx+20]:
-                    # Valid next byte, continue
-                    pass
-                else:
-                    # Skip junk bytes (padding, nulls, garbage) - warn once per sequence
-                    junk_start = idx
-                    junk_bytes = []
-                    while idx < len(content):
-                        b = content[idx]
-                        if b == ord(b'\n') or footer_marker in content[idx:idx+20]:
-                            # Found valid marker, stop skipping
-                            break
-                        junk_bytes.append(b)
-                        idx += 1
-                        # Safety: don't skip more than a reasonable amount
-                        if len(junk_bytes) >= CORRUPTION_SCAN_BYTES:
-                            # Too much junk - treat as serious corruption
-                            logger.warning(
-                                f"Unexpected byte 0x{next_byte:02x} at offset {junk_start} after PPS entry "
-                                f"(>{CORRUPTION_SCAN_BYTES} junk bytes)"
-                            )
-                            logger.error(
-                                "Scanning ahead for valid marker..."
-                            )
-
-                            # Scan ahead for next valid entry
-                            next_marker_idx = scan_for_next_valid_marker(
-                                content, idx, (pps_marker, gps_marker, imu_marker, footer_marker)
-                            )
-
-                            if next_marker_idx is not None:
-                                bytes_skipped = next_marker_idx - junk_start
-                                logger.info(
-                                    f"Recovered at offset {next_marker_idx} ({bytes_skipped} bytes skipped)"
-                                )
-                                idx = next_marker_idx
-                            else:
-                                logger.error(
-                                    f"Recovery failed. Parsed {len(pps_list)} PPS, "
-                                    f"{len(gnss_list)} GNSS, {len(imu_list)} IMU before corruption"
-                                )
-                            break
-                    
-                    if len(junk_bytes) > 0 and len(junk_bytes) < CORRUPTION_SCAN_BYTES:
-                        # Skipped some junk bytes, but not too many - just warn once
-                        logger.warning(
-                            f"Skipped {len(junk_bytes)} junk byte(s) at offset {junk_start} after PPS "
-                            f"(first: 0x{junk_bytes[0]:02x})"
-                        )
-
-        elif content[idx : idx + 4] == gps_marker:
-            # Check we have enough bytes for the full line
-            line_end = idx + GPS_LINE_SIZE
-            if line_end > len(content):
-                logger.warning(
-                    f"Incomplete GNSS entry at offset {idx}: "
-                    f"need {GPS_LINE_SIZE} bytes, only {len(content) - idx} available"
-                )
-                logger.error(
-                    f"File truncated. Parsed {len(pps_list)} PPS, "
-                    f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before truncation"
-                )
-                break
-
-            idx += 4
-            gnss_data = content[idx : idx + gps_struct_size]
-            try:
-                gnss_entry = parse_gnss_entry(gnss_data)
-                gnss_list.append(gnss_entry)
-            except (struct.error, AssertionError) as e:
-                logger.warning(
-                    f"Failed to parse GNSS entry at offset {idx}: {e}"
-                )
-                logger.error(
-                    f"Parsing aborted (data length={len(gnss_data)}, expected={gps_struct_size})"
-                )
-                raise
-            idx += gps_struct_size
-
-            # Check next byte is \n (start of next entry) or footer
-            if idx < len(content):
-                next_byte = content[idx]
-                if next_byte == ord(b'\n') or footer_marker in content[idx:idx+20]:
-                    # Valid next byte, continue
-                    pass
-                else:
-                    # Skip junk bytes (padding, nulls, garbage) - warn once per sequence
-                    junk_start = idx
-                    junk_bytes = []
-                    while idx < len(content):
-                        b = content[idx]
-                        if b == ord(b'\n') or footer_marker in content[idx:idx+20]:
-                            # Found valid marker, stop skipping
-                            break
-                        junk_bytes.append(b)
-                        idx += 1
-                        # Safety: don't skip more than a reasonable amount
-                        if len(junk_bytes) >= CORRUPTION_SCAN_BYTES:
-                            # Too much junk - treat as serious corruption
-                            logger.warning(
-                                f"Unexpected byte 0x{next_byte:02x} at offset {junk_start} after GNSS entry "
-                                f"(>{CORRUPTION_SCAN_BYTES} junk bytes)"
-                            )
-                            logger.error(
-                                "Scanning ahead for valid marker..."
-                            )
-
-                            # Scan ahead for next valid entry
-                            next_marker_idx = scan_for_next_valid_marker(
-                                content, idx, (pps_marker, gps_marker, imu_marker, footer_marker)
-                            )
-
-                            if next_marker_idx is not None:
-                                bytes_skipped = next_marker_idx - junk_start
-                                logger.info(
-                                    f"Recovered at offset {next_marker_idx} ({bytes_skipped} bytes skipped)"
-                                )
-                                idx = next_marker_idx
-                            else:
-                                logger.error(
-                                    f"Recovery failed. Parsed {len(pps_list)} PPS, "
-                                    f"{len(gnss_list)} GNSS, {len(imu_list)} IMU before corruption"
-                                )
-                            break
-                    
-                    if len(junk_bytes) > 0 and len(junk_bytes) < CORRUPTION_SCAN_BYTES:
-                        # Skipped some junk bytes, but not too many - just warn once
-                        logger.warning(
-                            f"Skipped {len(junk_bytes)} junk byte(s) at offset {junk_start} after GNSS "
-                            f"(first: 0x{junk_bytes[0]:02x})"
-                        )
-
-        elif content[idx : idx + 4] == imu_marker:
-            # Check we have enough bytes for the full line
-            line_end = idx + IMU_LINE_SIZE
-            if line_end > len(content):
-                logger.warning(
-                    f"Incomplete IMU entry at offset {idx}: "
-                    f"need {IMU_LINE_SIZE} bytes, only {len(content) - idx} available"
-                )
-                logger.error(
-                    f"File truncated. Parsed {len(pps_list)} PPS, "
-                    f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before truncation"
-                )
-                break
-
-            idx += 4
-            imu_data = content[idx : idx + imu_struct_size]
-            try:
-                imu_entry = parse_imu_entry(
-                    imu_data, acc_sensitivity, gyr_sensitivity
-                )
-                imu_list.append(imu_entry)
-            except (struct.error, AssertionError) as e:
-                logger.warning(
-                    f"Failed to parse IMU entry at offset {idx}: {e}"
-                )
-                logger.error(
-                    f"Parsing aborted (data length={len(imu_data)}, expected={imu_struct_size})"
-                )
-                raise
-            idx += imu_struct_size
-
-            # Skip padding bytes (C struct alignment adds 2 bytes)
-            idx += IMU_PADDING
-
-            # Check next byte is \n (start of next entry) or footer
-            if idx < len(content):
-                next_byte = content[idx]
-                if next_byte == ord(b'\n') or footer_marker in content[idx:idx+20]:
-                    # Valid next byte, continue
-                    pass
-                else:
-                    # Skip junk bytes (padding, nulls, garbage) - warn once per sequence
-                    junk_start = idx
-                    junk_bytes = []
-                    while idx < len(content):
-                        b = content[idx]
-                        if b == ord(b'\n') or footer_marker in content[idx:idx+20]:
-                            # Found valid marker, stop skipping
-                            break
-                        junk_bytes.append(b)
-                        idx += 1
-                        # Safety: don't skip more than a reasonable amount
-                        if len(junk_bytes) >= CORRUPTION_SCAN_BYTES:
-                            # Too much junk - treat as serious corruption
-                            logger.warning(
-                                f"Unexpected byte 0x{next_byte:02x} at offset {junk_start} after IMU entry "
-                                f"(>{CORRUPTION_SCAN_BYTES} junk bytes)"
-                            )
-                            logger.error(
-                                "Scanning ahead for valid marker..."
-                            )
-
-                            # Scan ahead for next valid entry
-                            next_marker_idx = scan_for_next_valid_marker(
-                                content, idx, (pps_marker, gps_marker, imu_marker, footer_marker)
-                            )
-
-                            if next_marker_idx is not None:
-                                bytes_skipped = next_marker_idx - junk_start
-                                logger.info(
-                                    f"Recovered at offset {next_marker_idx} ({bytes_skipped} bytes skipped)"
-                                )
-                                idx = next_marker_idx
-                            else:
-                                logger.error(
-                                    f"Recovery failed. Parsed {len(pps_list)} PPS, "
-                                    f"{len(gnss_list)} GNSS, {len(imu_list)} IMU before corruption"
-                                )
-                            break
-                    
-                    if len(junk_bytes) > 0 and len(junk_bytes) < CORRUPTION_SCAN_BYTES:
-                        # Skipped some junk bytes, but not too many - just warn once
-                        logger.warning(
-                            f"Skipped {len(junk_bytes)} junk byte(s) at offset {junk_start} after IMU "
-                            f"(first: 0x{junk_bytes[0]:02x})"
-                        )
-
-        elif footer_marker in content[idx : idx + len(footer_marker) + 10]:
-            logger.info("Found footer marker, stopping parsing")
-            break
-        else:
-            idx += 1
-
-    # Check if file ended properly with footer
-    footer_found = footer_marker in content[max(0, idx - 100) : idx + 100]
-    
-    if not footer_found and idx >= len(content):
-        # Reached end of file without finding footer
-        logger.warning(
-            f"Missing footer at end of file (byte {len(content)})"
-        )
-        logger.error(
-            f"File incomplete. Parsed {len(pps_list)} PPS, "
-            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries"
-        )
-    elif not footer_found and idx < len(content):
-        # Stopped parsing before end of file due to corruption
-        remaining_bytes = len(content) - idx
-        logger.warning(
-            f"Parsing stopped at byte {idx} ({remaining_bytes} bytes remaining)"
-        )
-        logger.error(
-            f"Unrecoverable corruption. Parsed {len(pps_list)} PPS, "
-            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU before corruption"
-        )
-    
-    logger.info(
-        f"Parsed {len(pps_list)} PPS, {len(gnss_list)} GNSS, {len(imu_list)} IMU"
+    # Parse binary content
+    pps_list, gnss_list, imu_list = parse_binary_content(
+        content, header_info, pps_marker, gps_marker, imu_marker, footer_marker
     )
 
-    # Unwrap and detect jumps for all relevant fields
-    logger.info("Unwrapping and detecting jumps in data...")
+    # Find global minimum micros reading for reference
+    all_micros = (
+        [p.micros_reading for p in pps_list] +
+        [g.micros_reading for g in gnss_list] +
+        [i.micros_reading for i in imu_list]
+    )
+    global_min_micros = min(all_micros) if all_micros else 0
+    logger.info(f"Global minimum micros reading: {global_min_micros}")
+
+    # Compute PPS regression
+    logger.info("Computing PPS to UTC timestamp regression...")
+    regression = compute_pps_regression(pps_list, gnss_list, global_min_micros)
+    if regression is None:
+        logger.warning("Skipping PPS regression due to insufficient data")
+    else:
+        slope, intercept = regression
+        apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
+        compute_pps_mismatch_statistics(pps_list)
+
+    # Unwrap potentially wrapping arrays and detect jumps
     unwrap_stats = {}
 
     # Process PPS micros_reading
@@ -1213,54 +1347,7 @@ def decode_file(
         }
 
     # Print summary statistics
-    print_summary_statistics(pps_list, gnss_list, imu_list, unwrap_stats)
+    print_summary_statistics(pps_list, gnss_list, imu_list, unwrap_stats=unwrap_stats)
 
-    # Compute and apply PPS regression
-    # Find global minimum micros across all data types
-    all_micros = []
-    if pps_list:
-        all_micros.extend([p.micros_reading for p in pps_list])
-    if gnss_list:
-        all_micros.extend([g.micros_reading for g in gnss_list])
-    if imu_list:
-        all_micros.extend([i.micros_reading for i in imu_list])
-
-    global_min_micros = min(all_micros) if all_micros else 0
-    logger.info(f"Global minimum micros reading: {global_min_micros}")
-
-    logger.info("Computing PPS to UTC timestamp regression...")
-    regression = compute_pps_regression(pps_list, gnss_list, global_min_micros)
-    if regression is None:
-        logger.warning("Skipping PPS regression due to insufficient data")
-    else:
-        slope, intercept = regression
-        apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
-
-        # Compute and display PPS mismatch statistics
-        compute_pps_mismatch_statistics(pps_list, show_plot=show_plots)
-
-    base_name = input_file.stem
-    output_files = {}
-
-    pps_array = np.array(pps_list, dtype=object)
-    pps_file = output_dir / f"{base_name}_pps.npy"
-    np.save(pps_file, pps_array)
-    output_files["pps"] = pps_file
-    logger.info(f"Saved PPS data to {pps_file}")
-
-    gnss_array = np.array(gnss_list, dtype=object)
-    gnss_file = output_dir / f"{base_name}_gnss.npy"
-    np.save(gnss_file, gnss_array)
-    output_files["gnss"] = gnss_file
-    logger.info(f"Saved GNSS data to {gnss_file}")
-
-    imu_array = np.array(imu_list, dtype=object)
-    imu_file = output_dir / f"{base_name}_imu.npy"
-    np.save(imu_file, imu_array)
-    output_files["imu"] = imu_file
-    logger.info(f"Saved IMU data to {imu_file}")
-
-    # Add unwrap statistics to output
-    output_files["unwrap_stats"] = unwrap_stats
-
-    return output_files
+    # Save results and return file paths with unwrap stats
+    return save_decoded_data(pps_list, gnss_list, imu_list, output_dir, input_file.stem, unwrap_stats)
