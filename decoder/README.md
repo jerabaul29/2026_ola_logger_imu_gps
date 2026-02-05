@@ -61,7 +61,7 @@ The CLI tool will:
    - GNSS coordinates (latitude/longitude over time)
    - Time differences between consecutive IMU and GNSS entries (from both micros and UTC regression)
    - PPS mismatch (UTC regression vs closest second)
-   - IMU counter vs entry number
+   - IMU counter (raw and unwrapped, with anomaly detection)
 
 ### Example Script
 
