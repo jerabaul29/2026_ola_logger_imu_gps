@@ -38,11 +38,13 @@ def main(path: Path) -> None:
     # Extract unwrap stats
     unwrap_stats = output_files.get("unwrap_stats", None)
 
-    # Load the decoded data
+    # Load the decoded data from compressed archive
     logger.info("Loading decoded data for visualization...")
-    pps_data = np.load(output_files["pps"], allow_pickle=True)
-    gnss_data = np.load(output_files["gnss"], allow_pickle=True)
-    imu_data = np.load(output_files["imu"], allow_pickle=True)
+    npz_file = output_files["file"]
+    with np.load(npz_file, allow_pickle=True) as data:
+        pps_data = data["pps"]
+        gnss_data = data["gnss"]
+        imu_data = data["imu"]
 
     logger.info(f"Loaded {len(pps_data)} PPS, {len(gnss_data)} GNSS, {len(imu_data)} IMU entries")
 

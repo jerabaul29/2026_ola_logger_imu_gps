@@ -83,7 +83,7 @@ python example_decode.py
 This will:
 1. Parse `DATA_BOOT_0055_TIME_20260120T211500.dat`
 2. Extract PPS, GNSS, and IMU data
-3. Save three `.npy` files (one for each data type)
+3. Save compressed `.npz` file containing all three data types
 4. Display sample entries
 
 ### Programmatic Usage
@@ -98,10 +98,12 @@ data_file = Path("DATA_BOOT_0055_TIME_20260120T211500.dat")
 # Set show_plots=True to display ASCII plots (disabled by default)
 output_files = decode_file(data_file, show_plots=False)
 
-# Load the decoded data
-pps_data = np.load(output_files["pps"], allow_pickle=True)
-gnss_data = np.load(output_files["gnss"], allow_pickle=True)
-imu_data = np.load(output_files["imu"], allow_pickle=True)
+# Load the decoded data from compressed archive
+npz_file = output_files["file"]
+with np.load(npz_file, allow_pickle=True) as data:
+    pps_data = data["pps"]
+    gnss_data = data["gnss"]
+    imu_data = data["imu"]
 
 # Access individual entries
 print(f"First PPS: {pps_data[0]}")
@@ -188,9 +190,10 @@ complexipy decoder.py
 ## Output Files
 
 For each input file `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.dat`, the decoder generates:
-- `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS_pps.npy` - Array of PPSFix objects
-- `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS_gnss.npy` - Array of GNSSReading objects
-- `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS_imu.npy` - Array of IMUReading objects
+- `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.npz` - Compressed numpy archive containing:
+  - `pps` - Array of PPSFix objects
+  - `gnss` - Array of GNSSReading objects
+  - `imu` - Array of IMUReading objects
 
 ## Data Structures
 

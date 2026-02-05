@@ -1160,40 +1160,31 @@ def save_decoded_data(
     base_name: str,
     unwrap_stats: dict | None = None,
 ) -> dict[str, Path]:
-    """Save decoded data to numpy files.
+    """Save decoded data to compressed numpy archive.
     
     Args:
         pps_list, gnss_list, imu_list: Parsed data lists
         output_dir: Directory to save files
-        base_name: Base name for output files
+        base_name: Base name for output file
         unwrap_stats: Optional unwrap statistics to include in return
         
     Returns:
         Dictionary with keys:
-        - "pps": Path to PPS file
-        - "gnss": Path to GNSS file
-        - "imu": Path to IMU file
+        - "file": Path to compressed .npz file
         - "unwrap_stats": Unwrap statistics (if provided)
     """
     output_files = {}
     
+    # Convert to arrays
     pps_array = np.array(pps_list, dtype=object)
-    pps_file = output_dir / f"{base_name}_pps.npy"
-    np.save(pps_file, pps_array)
-    output_files["pps"] = pps_file
-    logger.info(f"Saved PPS data to {pps_file}")
-    
     gnss_array = np.array(gnss_list, dtype=object)
-    gnss_file = output_dir / f"{base_name}_gnss.npy"
-    np.save(gnss_file, gnss_array)
-    output_files["gnss"] = gnss_file
-    logger.info(f"Saved GNSS data to {gnss_file}")
-    
     imu_array = np.array(imu_list, dtype=object)
-    imu_file = output_dir / f"{base_name}_imu.npy"
-    np.save(imu_file, imu_array)
-    output_files["imu"] = imu_file
-    logger.info(f"Saved IMU data to {imu_file}")
+    
+    # Save as single compressed file
+    npz_file = output_dir / f"{base_name}.npz"
+    np.savez_compressed(npz_file, pps=pps_array, gnss=gnss_array, imu=imu_array)
+    output_files["file"] = npz_file
+    logger.info(f"Saved decoded data to {npz_file} (compressed)")
     
     if unwrap_stats is not None:
         output_files["unwrap_stats"] = unwrap_stats
@@ -1213,14 +1204,15 @@ def decode_file(
     gps_struct_size: int = GPS_STRUCT_SIZE,
     imu_struct_size: int = IMU_STRUCT_SIZE,
 ) -> dict[str, Path]:
-    """Decode a single data file and save to numpy arrays.
+    """Decode a single data file and save to compressed numpy archive.
 
     This function performs the complete decoding pipeline:
     1. Parses file header to extract sensor sensitivities
     2. Scans binary file for PPS, GNSS, and IMU entries
     3. Computes linear regression from PPS+GNSS to get UTC timestamps
     4. Applies regression to all entries for synchronized timestamps
-    5. Saves decoded data to .npy files
+    5. Unwraps potentially wrapping counters and detects anomalies
+    6. Saves decoded data to compressed .npz file
 
     Args:
         input_file: Path to input data file
@@ -1233,9 +1225,8 @@ def decode_file(
 
     Returns:
         Dictionary with keys:
-        - "pps": Path to PPS .npy file
-        - "gnss": Path to GNSS .npy file
-        - "imu": Path to IMU .npy file
+        - "file": Path to compressed .npz file
+        - "unwrap_stats": Unwrap statistics with wrap/jump counts
 
     Raises:
         AssertionError: If binary data structure doesn't match expected format

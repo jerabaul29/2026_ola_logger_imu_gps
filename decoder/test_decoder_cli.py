@@ -56,11 +56,10 @@ def test_cli_with_real_data():
 
     assert result.exit_code == 0
 
-    # Clean up generated files
-    for suffix in ["_pps.npy", "_gnss.npy", "_imu.npy"]:
-        output_file = test_file.parent / f"{test_file.stem}{suffix}"
-        if output_file.exists():
-            output_file.unlink()
+    # Clean up generated file
+    output_file = test_file.parent / f"{test_file.stem}.npz"
+    if output_file.exists():
+        output_file.unlink()
 
 
 def test_plot_functions_with_empty_data(tmp_path):

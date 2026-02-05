@@ -61,8 +61,8 @@ Everything for parsing etc is written in python
 - avoid object oriented if not necessary, make the code based on simple functions
 - pass the ALL_CAPS_CONSTANTS as default args, it is ok to have many default args to the functions
 - use individual functions to parse each raw data kind (i.e. parse 1 line of raw data)
-- write a single function to parse a single file and write the npy to disk
-- when dumping to disk, there should be an individual .npy file for each datakind, containing a numpy array of dataclass objects matching the object kind
+- write a single function to parse a single file and write the data to disk
+- when dumping to disk, save as a single compressed .npz file containing numpy arrays for each data kind (pps, gnss, imu), with each array containing dataclass objects matching the object kind
 - after parsing, summarize the information: both file duration based on the micros information (take the first and last micros from IMU measurements), number of messages of each kind parsed, corresponding effective frequency
 
 ## Misc

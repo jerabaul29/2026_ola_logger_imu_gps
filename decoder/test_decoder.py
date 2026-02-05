@@ -105,13 +105,14 @@ def test_decode_file_with_real_data():
 
     output_files = decode_file(test_file)
 
-    assert "pps" in output_files
-    assert "gnss" in output_files
-    assert "imu" in output_files
+    assert "file" in output_files
+    assert "unwrap_stats" in output_files
 
-    pps_data = np.load(output_files["pps"], allow_pickle=True)
-    gnss_data = np.load(output_files["gnss"], allow_pickle=True)
-    imu_data = np.load(output_files["imu"], allow_pickle=True)
+    # Load from compressed archive
+    with np.load(output_files["file"], allow_pickle=True) as data:
+        pps_data = data["pps"]
+        gnss_data = data["gnss"]
+        imu_data = data["imu"]
 
     assert len(pps_data) > 0
     assert len(gnss_data) > 0
@@ -178,13 +179,14 @@ GNSS update rate (Hz): 10
 
     output_files = decode_file(test_file, output_dir=tmp_path)
 
-    assert "pps" in output_files
-    assert "gnss" in output_files
-    assert "imu" in output_files
+    assert "file" in output_files
+    assert "unwrap_stats" in output_files
 
-    pps_data = np.load(output_files["pps"], allow_pickle=True)
-    gnss_data = np.load(output_files["gnss"], allow_pickle=True)
-    imu_data = np.load(output_files["imu"], allow_pickle=True)
+    # Load from compressed archive
+    with np.load(output_files["file"], allow_pickle=True) as data:
+        pps_data = data["pps"]
+        gnss_data = data["gnss"]
+        imu_data = data["imu"]
 
     assert len(pps_data) == 1
     assert len(gnss_data) == 1
@@ -307,7 +309,8 @@ GNSS update rate (Hz): 10
     
     # Decode the file
     output_files = decode_file(test_file, output_dir=tmp_path)
-    imu_data = np.load(output_files["imu"], allow_pickle=True)
+    with np.load(output_files["file"], allow_pickle=True) as data:
+        imu_data = data["imu"]
     
     # Should have parsed all 5 entries
     assert len(imu_data) == 5

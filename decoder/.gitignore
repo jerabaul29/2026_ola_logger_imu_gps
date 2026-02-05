@@ -5,6 +5,7 @@ __pycache__/
 
 # NumPy output files
 *.npy
+*.npz
 
 # Complexipy cache
 .complexipy_cache/
