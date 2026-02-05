@@ -28,6 +28,7 @@ def main(path: Path) -> None:
     - GNSS coordinates (latitude/longitude)
     - Time differences between consecutive IMU and GNSS entries
     - PPS mismatch (UTC regression vs closest second)
+    - IMU counter vs entry number
     """
     logger.info(f"Decoding file: {path}")
 
@@ -59,6 +60,9 @@ def main(path: Path) -> None:
 
     # Plot 5: PPS mismatch
     plot_pps_mismatch(pps_data)
+
+    # Plot 6: IMU counter vs entry number
+    plot_imu_counter(imu_data)
 
     logger.success("All plots created! Close plot windows to exit.")
     plt.show()
@@ -284,6 +288,34 @@ def plot_time_differences(imu_data: np.ndarray, gnss_data: np.ndarray) -> None:
 
     plt.tight_layout()
     logger.info("Created time differences plot")
+
+
+def plot_imu_counter(imu_data: np.ndarray) -> None:
+    """Plot IMU counter as a function of entry number.
+
+    Args:
+        imu_data: Array of IMUReading objects
+    """
+    if len(imu_data) == 0:
+        logger.warning("No IMU data to plot")
+        return
+
+    # Extract counter values
+    counters = np.array([imu.counter for imu in imu_data])
+    entry_numbers = np.arange(len(imu_data))
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.suptitle("IMU Counter vs Entry Number", fontsize=14, fontweight="bold")
+
+    ax.plot(entry_numbers, counters, "b-", linewidth=0.8, label="IMU Counter")
+    ax.set_xlabel("Entry Number")
+    ax.set_ylabel("Counter Value")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    plt.tight_layout()
+    logger.info("Created IMU counter plot")
 
 
 def plot_pps_mismatch(pps_data: np.ndarray) -> None:

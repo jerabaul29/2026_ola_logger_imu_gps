@@ -55,12 +55,13 @@ python decoder_cli.py --help
 
 The CLI tool will:
 1. Decode the data file (showing decoder logs)
-2. Generate five matplotlib visualizations:
+2. Generate six matplotlib visualizations:
    - 3-axis acceleration (mg)
    - 3-axis gyroscope (mdps)
    - GNSS coordinates (latitude/longitude over time)
    - Time differences between consecutive IMU and GNSS entries (from both micros and UTC regression)
    - PPS mismatch (UTC regression vs closest second)
+   - IMU counter vs entry number
 
 ### Example Script
 
