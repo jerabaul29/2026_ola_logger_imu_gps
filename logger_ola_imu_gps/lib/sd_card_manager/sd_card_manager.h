@@ -20,6 +20,9 @@
 /// RingBuf size for multi-block writes
 static constexpr size_t SD_RINGBUF_SIZE = 2 * 32 * 512;
 
+/// Enable RingBuf for buffered writes; just comment out to disable and write directly to SD card
+#define USE_RINGBUFF
+
 /**
  * @class SD_Card_Manager
  * @brief Manages SD card initialization, power, and file operations
@@ -107,10 +110,12 @@ public:
 private:
     SdFat sd_card;              ///< SD card filesystem object
     FsFile sd_file;             ///< Currently open file object
+#ifdef USE_RINGBUFF
     RingBuf<FsFile, SD_RINGBUF_SIZE> ring_buf;  ///< Ring buffer for multi-block writes
+#endif
     bool sd_initialized = false; ///< True if SD card successfully initialized
     bool file_open = false;     ///< True if a file is currently open
-    char filename_buffer[128];  ///< filename is BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYMMDDTHHMMSS.dat
+    char filename_buffer[128];  ///< filename is BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYYYMMDDTHHMMSS.dat
 };
 
 /// Global SD card manager instance

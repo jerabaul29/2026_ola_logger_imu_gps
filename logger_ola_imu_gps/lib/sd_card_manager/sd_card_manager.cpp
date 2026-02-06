@@ -222,9 +222,11 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes, bool use_fo
     wdt.restart();
     
     // Initialize RingBuf with the opened file
+#ifdef USE_RINGBUFF
     ring_buf.begin(&sd_file);
     delay(500);
     wdt.restart();
+#endif
     
     return true;
 }
@@ -236,10 +238,12 @@ void SD_Card_Manager::close_and_sync_file() {
     
     SERIAL_USB->println(F("Syncing and closing file..."));
     
+#ifdef USE_RINGBUFF
     // Flush all data from RingBuf to file
     ring_buf.sync();
     delay(1000);
     wdt.restart();
+#endif
     
     sd_file.sync();
     delay(1000);
@@ -258,9 +262,9 @@ bool SD_Card_Manager::write_buffer(const uint8_t* buffer, size_t size) {
         SERIAL_USB->println(F("ERROR: No file open for writing"));
         return false;
     }
-
-    digitalWrite(PIN_STAT_LED, HIGH);
     
+#ifdef USE_RINGBUFF
+    digitalWrite(PIN_STAT_LED, HIGH);
     // Check if we need to flush before writing new data
     // This ensures we don't overflow the buffer
     // Do this BEFORE writing to avoid blocking after the write
@@ -269,14 +273,22 @@ bool SD_Card_Manager::write_buffer(const uint8_t* buffer, size_t size) {
         // This performs SD writes but keeps ISR blocking minimal
         // Restart watchdog as this can take time
         wdt.restart();
+
         ring_buf.writeOut(SD_RINGBUF_SIZE / 2);
+
         wdt.restart();
     }
     
     // Write to RingBuf - the write() itself only briefly disables interrupts
     // during the counter update (a few CPU cycles)
     size_t written = ring_buf.write(buffer, size);
-    
     digitalWrite(PIN_STAT_LED, LOW);
+#else
+    // Direct write to SD card file
+    digitalWrite(PIN_STAT_LED, HIGH);
+    size_t written = sd_file.write(buffer, size);
+    digitalWrite(PIN_STAT_LED, LOW);
+#endif
+    
     return (written == size);
 }
