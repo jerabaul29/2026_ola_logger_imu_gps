@@ -59,7 +59,7 @@ ISM330DHCXSensor AccGyr(I2C_QWIIC, ISM330DHCX_I2C_ADD_L);
 
 static constexpr uint32_t seconds_in_15_minutes = 15 * 60;
 
-constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 10 * 1024 * 1024; // Preallocate a file large enough for logging
+constexpr uint32_t PREALLOCATE_LOGFILE_SIZE_BYTES = 12 * 1024 * 1024; // Preallocate a file large enough for logging
 
 static constexpr char str_start_logging[] = "Log start OLA ISM330DHCX SAM-M10Q logger\n\n";
 static constexpr char str_stop_logging[] = "\n\nLog stop OLA ISM330DHCX SAM-M10Q logger\n";
