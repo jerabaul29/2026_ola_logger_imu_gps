@@ -55,12 +55,13 @@ public:
      * and preallocates the specified size to improve write performance.
      * 
      * @param size_bytes Number of bytes to preallocate (0 = no preallocation)
+     * @param use_folders If true, organize files into BOOT_XXXXXX folders; if false, put all files in root
      * @return true if file opened successfully, false otherwise
      * @note Closes any previously open file before opening new one
      */
-    bool preallocate_and_open_file(uint32_t size_bytes);
+    bool preallocate_and_open_file(uint32_t size_bytes, bool use_folders = true);
 
-    void generate_filename();
+    void generate_filename(bool use_folders = true);
     
     /**
      * @brief Sync and close the currently open file
@@ -109,7 +110,7 @@ private:
     RingBuf<FsFile, SD_RINGBUF_SIZE> ring_buf;  ///< Ring buffer for multi-block writes
     bool sd_initialized = false; ///< True if SD card successfully initialized
     bool file_open = false;     ///< True if a file is currently open
-    char filename_buffer[64];  ///< filename is BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYMMDDTHHMMSS.dat
+    char filename_buffer[128];  ///< filename is BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYMMDDTHHMMSS.dat
 };
 
 /// Global SD card manager instance

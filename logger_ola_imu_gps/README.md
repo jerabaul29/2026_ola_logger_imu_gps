@@ -45,7 +45,7 @@ The amount of data generated is 1 file every 15 minutes, typical file size aroun
 
 The red LED may blink during setup.
 
-The blue LED should blink rapidly / flicker during logging (it is on while busy writing to SD, off when no ongoing SD writing).
+The blue LED should blink / possibly flicker during logging (it is on while busy writing to SD, off when no ongoing SD writing).
 
 The PPS LED should blink at 1Hz when GPS signal is available.
 
@@ -55,7 +55,7 @@ The logger only logs if it gets GPS information - if no GPS information within 5
 
 The project uses the Sparkfun Artemis Arduino core v1, made available through the PlatformIO platform: see instructions at: https://github.com/nigelb/platform-apollo3blue . Make sure to choose Core V1. All dependencies are hard copied in the lib folder.
 
-In addition we provide the .bin file, that has been compiled in advance and can be uploaded directly to the OLA using: https://github.com/sparkfun/Artemis-Firmware-Upload-GUI .
+In addition we provide .bin files (for different firmware flavor, see naming), that have been compiled in advance and can be uploaded directly to the OLA using: https://github.com/sparkfun/Artemis-Firmware-Upload-GUI .
 
 ## Data extraction from files
 

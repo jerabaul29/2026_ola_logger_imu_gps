@@ -28,6 +28,8 @@ bool gyr_available = false;
 
 char working_buffer[1024];
 
+static constexpr bool USE_FOLDERS = true; // If true, organize files into BOOT_XXXXXX folders; if false, put all files in root
+
 SFE_UBLOX_GNSS log_GNSS;
 // static constexpr uint32_t GNSS_FREQUENCY_HZ = 1;
 static constexpr uint32_t GNSS_FREQUENCY_HZ = 10;
@@ -627,7 +629,7 @@ void setup() {
     SERIAL_USB->println();
     SERIAL_USB->println(F("Preparing to start new log file..."));
 
-    if (sd_card_manager.preallocate_and_open_file(PREALLOCATE_LOGFILE_SIZE_BYTES)) {
+    if (sd_card_manager.preallocate_and_open_file(PREALLOCATE_LOGFILE_SIZE_BYTES, USE_FOLDERS)) {
       SERIAL_USB->println(F("Log file opened and preallocated successfully."));
     } else {
       SERIAL_USB->println(F("ERROR: Failed to open and preallocate log file on SD card."));
