@@ -187,7 +187,7 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes, bool use_fo
         SERIAL_USB->println(sd_card.card()->errorData(), HEX);
         return false;
     }
-    delay(1000);
+    delay(500);
     wdt.restart();
     
     file_open = true;
@@ -241,19 +241,19 @@ void SD_Card_Manager::close_and_sync_file() {
 #ifdef USE_RINGBUFF
     // Flush all data from RingBuf to file
     ring_buf.sync();
-    delay(1000);
+    delay(500);
     wdt.restart();
 #endif
     
     sd_file.sync();
-    delay(1000);
+    delay(500);
     wdt.restart();
 
     sd_file.close();
     file_open = false;
     SERIAL_USB->println(F("File closed"));
     wdt.restart();
-    delay(1000);
+    delay(500);
     wdt.restart();
 }
 
