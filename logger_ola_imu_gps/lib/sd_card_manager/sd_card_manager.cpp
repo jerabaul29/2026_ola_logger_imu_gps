@@ -46,9 +46,9 @@ void SD_Card_Manager::generate_filename(bool use_folders) {
     common_working_struct_YMDHMS = YMDHMS_from_posix_timestamp(common_working_posix_timestamp);
     
     if (use_folders) {
-        // Generate filename in format: BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYMMDDTHHMMSS.dat
+        // Generate filename in format: BOOT_XXXXXX/DATA_BOOT_XXXXXX_TIME_YYYYMMDDTHHMMSS.dat
         snprintf(filename_buffer, sizeof(filename_buffer),
-                 "BOOT_%06u/DATA_BOOT_%06u_TIME_%02u%02u%02uT%02u%02u%02u.dat",
+                 "BOOT_%06u/DATA_BOOT_%06u_TIME_%04u%02u%02uT%02u%02u%02u.dat",
                  boot_count,
                  boot_count,
                  common_working_struct_YMDHMS.year,
@@ -58,9 +58,9 @@ void SD_Card_Manager::generate_filename(bool use_folders) {
                  common_working_struct_YMDHMS.minute,
                  common_working_struct_YMDHMS.second);
     } else {
-        // Generate filename in format: DATA_BOOT_XXXXXX_TIME_YYMMDDTHHMMSS.dat (root folder)
+        // Generate filename in format: DATA_BOOT_XXXXXX_TIME_YYYYMMDDTHHMMSS.dat (root folder)
         snprintf(filename_buffer, sizeof(filename_buffer),
-                 "DATA_BOOT_%06u_TIME_%02u%02u%02uT%02u%02u%02u.dat",
+                 "DATA_BOOT_%06u_TIME_%04u%02u%02uT%02u%02u%02u.dat",
                  boot_count,
                  common_working_struct_YMDHMS.year,
                  common_working_struct_YMDHMS.month,
@@ -206,11 +206,15 @@ bool SD_Card_Manager::preallocate_and_open_file(uint32_t size_bytes, bool use_fo
         SERIAL_USB->print(size_bytes);
         SERIAL_USB->println(F(" bytes..."));
         
+        // Restart watchdog before starting long preallocation
+        wdt.restart();
+        
         if (!sd_file.preAllocate(size_bytes)) {
             SERIAL_USB->println(F("WARNING: Failed to preallocate file!"));
             SERIAL_USB->println(F("Continuing without preallocation..."));
         } else {
             SERIAL_USB->println(F("File preallocated successfully"));
+            wdt.restart();  // Restart after preallocation completes
             sd_file.sync();  // Ensure FAT is updated
         }
     }
@@ -260,10 +264,13 @@ bool SD_Card_Manager::write_buffer(const uint8_t* buffer, size_t size) {
     // Check if we need to flush before writing new data
     // This ensures we don't overflow the buffer
     // Do this BEFORE writing to avoid blocking after the write
-    if (ring_buf.bytesFree() < size + 512) {
+    if (ring_buf.bytesFree() < size + SD_RINGBUF_SIZE / 4) {
         // Write out half the buffer to make room
         // This performs SD writes but keeps ISR blocking minimal
+        // Restart watchdog as this can take time
+        wdt.restart();
         ring_buf.writeOut(SD_RINGBUF_SIZE / 2);
+        wdt.restart();
     }
     
     // Write to RingBuf - the write() itself only briefly disables interrupts
