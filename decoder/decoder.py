@@ -257,8 +257,12 @@ def compute_pps_regression(
     1. Uses unwrapped micros timestamps for both PPS and GNSS data
     2. For each PPS event, finds the temporally closest GNSS measurement
     3. Uses GNSS UTC time to determine which second boundary the PPS marks
-    4. Performs linear regression: UTC_time = slope × micros + intercept
-    5. Subtracts global_min_micros to avoid numerical precision issues
+    4. Performs linear regression with improved normalization:
+       - Subtracts minimum from both micros and UTC timestamps
+       - Converts micros offset to seconds
+       - Normalizes both quantities to max value of 1.0
+       - This improves numerical stability and precision of the regression
+    5. Transforms coefficients back to original scale: UTC_time = slope × micros + intercept
 
     Args:
         pps_list: List of PPS fixes (must have micros_reading_unwrapped populated)
@@ -325,26 +329,60 @@ def compute_pps_regression(
         pps_matched_micros.append(pps_micros)
         pps_matched_utc.append(float(utc_second))
 
-    # Perform linear regression
-    # To avoid numerical inaccuracies, subtract the minimum micros value
+    # Perform linear regression with improved normalization
+    # To avoid numerical inaccuracies:
+    # 1. Subtract minimum from both micros and UTC
+    # 2. Convert micros offset to seconds
+    # 3. Normalize both to have max value of 1.0
+    
     # Use global minimum if provided, otherwise use minimum from PPS data
     if global_min_micros is None:
         min_micros = min(pps_matched_micros)
     else:
         min_micros = global_min_micros
-
+    
+    min_utc = min(pps_matched_utc)
+    
+    # Subtract minimums
     pps_matched_micros_offset = [m - min_micros for m in pps_matched_micros]
-
-    slope, intercept_offset, r_value, p_value, std_err = stats.linregress(
-        pps_matched_micros_offset, pps_matched_utc
+    pps_matched_utc_offset = [u - min_utc for u in pps_matched_utc]
+    
+    # Convert micros to seconds
+    pps_matched_micros_offset_sec = [m / 1e6 for m in pps_matched_micros_offset]
+    
+    # Normalize both to max value of 1.0
+    max_micros_sec = max(pps_matched_micros_offset_sec)
+    max_utc = max(pps_matched_utc_offset)
+    
+    # Avoid division by zero (shouldn't happen with valid data)
+    if max_micros_sec == 0 or max_utc == 0:
+        logger.error("Cannot normalize: max value is zero")
+        return None
+    
+    pps_matched_micros_normalized = [m / max_micros_sec for m in pps_matched_micros_offset_sec]
+    pps_matched_utc_normalized = [u / max_utc for u in pps_matched_utc_offset]
+    
+    # Perform linear regression on normalized data
+    slope_norm, intercept_norm, r_value, p_value, std_err = stats.linregress(
+        pps_matched_micros_normalized, pps_matched_utc_normalized
     )
-
-    # Adjust intercept to account for the offset we subtracted
-    intercept = intercept_offset - slope * min_micros
+    
+    # Transform back to original scale
+    # y_norm = slope_norm * x_norm + intercept_norm
+    # (y - min_utc) / max_utc = slope_norm * ((x - min_micros)/1e6) / max_micros_sec + intercept_norm
+    # y = slope_norm * max_utc * (x - min_micros) / (1e6 * max_micros_sec) + intercept_norm * max_utc + min_utc
+    # y = slope_final * x + intercept_final
+    # where slope_final = slope_norm * max_utc / (1e6 * max_micros_sec)
+    #       intercept_final = -slope_final * min_micros + intercept_norm * max_utc + min_utc
+    
+    slope = slope_norm * max_utc / (1e6 * max_micros_sec)
+    intercept = -slope * min_micros + intercept_norm * max_utc + min_utc
 
     logger.info(f"PPS regression: slope={slope:.12f}, intercept={intercept:.6f}")
     logger.info(f"  R²={r_value**2:.9f}, p-value={p_value:.2e}, std_err={std_err:.2e}")
     logger.info(f"  Used {len(pps_matched_micros)} PPS-GNSS matched pairs")
+    logger.info(f"  Normalization: micros range {min_micros} to {min_micros + max_micros_sec*1e6:.0f} µs")
+    logger.info(f"  Normalization: UTC range {min_utc:.1f} to {min_utc + max_utc:.1f} s")
 
     return (slope, intercept)
 
