@@ -89,12 +89,15 @@ GNSS update rate (Hz): 10
 """
     test_file.write_text(header_content)
 
-    header_info = parse_header(test_file)
+    header_info, header_text = parse_header(test_file)
     assert header_info["acc_sensitivity"] == 0.061
     assert header_info["gyr_sensitivity"] == 4.375
     assert header_info["imu_odr"] == 417.0
     assert header_info["gnss_rate"] == 10.0
     assert header_info["firmware_commit"] == "391b428a3e869543ebd2caf1626f845730858f8b"
+    assert isinstance(header_text, str)
+    assert "Log start OLA ISM330DHCX SAM-M10Q logger" in header_text
+    assert "Firmware commit ID" in header_text
 
 
 def test_decode_file_with_real_data():

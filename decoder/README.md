@@ -104,6 +104,14 @@ with np.load(npz_file, allow_pickle=True) as data:
     pps_data = data["pps"]
     gnss_data = data["gnss"]
     imu_data = data["imu"]
+    
+    # Access header information
+    header_string = data["header_string"][0]  # Full header text
+    acc_sens = data["acc_sensitivity"][0]     # Accelerometer sensitivity (mg/LSB)
+    gyr_sens = data["gyr_sensitivity"][0]     # Gyroscope sensitivity (mdps/LSB)
+    imu_odr = data["imu_odr"][0]              # IMU output data rate (Hz)
+    gnss_rate = data["gnss_rate"][0]          # GNSS update rate (Hz)
+    firmware = data["firmware_commit"][0]     # Firmware commit ID
 
 # Access individual entries
 print(f"First PPS: {pps_data[0]}")
@@ -194,6 +202,12 @@ For each input file `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.dat`, the decoder gener
   - `pps` - Array of PPSFix objects
   - `gnss` - Array of GNSSReading objects
   - `imu` - Array of IMUReading objects
+  - `header_string` - Array containing the full header text (single string)
+  - `acc_sensitivity` - Array containing accelerometer sensitivity in mg/LSB (single float)
+  - `gyr_sensitivity` - Array containing gyroscope sensitivity in mdps/LSB (single float)
+  - `imu_odr` - Array containing IMU output data rate in Hz (single float)
+  - `gnss_rate` - Array containing GNSS update rate in Hz (single float)
+  - `firmware_commit` - Array containing firmware commit ID (single string)
 
 ## Data Structures
 

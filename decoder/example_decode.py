@@ -57,13 +57,33 @@ if __name__ == "__main__":
     logger.info("LOADING DECODED DATA")
     logger.info("=" * 80)
 
-    pps_data = np.load(output_files["pps"], allow_pickle=True)
+    # Load the decoded data from compressed archive
+    npz_file = output_files["file"]
+    with np.load(npz_file, allow_pickle=True) as data:
+        pps_data = data["pps"]
+        gnss_data = data["gnss"]
+        imu_data = data["imu"]
+        
+        # Display header information
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("HEADER INFORMATION")
+        logger.info("=" * 80)
+        if "header_string" in data:
+            logger.info(f"Full header:\n{data['header_string'][0]}")
+        if "acc_sensitivity" in data:
+            logger.info(f"Acc sensitivity: {data['acc_sensitivity'][0]} mg/LSB")
+        if "gyr_sensitivity" in data:
+            logger.info(f"Gyr sensitivity: {data['gyr_sensitivity'][0]} mdps/LSB")
+        if "imu_odr" in data:
+            logger.info(f"IMU ODR: {data['imu_odr'][0]} Hz")
+        if "gnss_rate" in data:
+            logger.info(f"GNSS rate: {data['gnss_rate'][0]} Hz")
+        if "firmware_commit" in data:
+            logger.info(f"Firmware commit: {data['firmware_commit'][0]}")
+
     print_data_sample(pps_data, "PPS", n=10)
-
-    gnss_data = np.load(output_files["gnss"], allow_pickle=True)
     print_data_sample(gnss_data, "GNSS", n=10)
-
-    imu_data = np.load(output_files["imu"], allow_pickle=True)
     print_data_sample(imu_data, "IMU", n=10)
 
     logger.info("")

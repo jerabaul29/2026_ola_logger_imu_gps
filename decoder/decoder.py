@@ -99,7 +99,7 @@ def parse_header(
     file_path: Path,
     markers: tuple[bytes, bytes, bytes] = (PPS_MARKER, GPS_MARKER, IMU_MARKER),
     search_bytes: int = HEADER_SEARCH_BYTES,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     """Parse the header of the data file and extract metadata.
 
     Args:
@@ -108,7 +108,7 @@ def parse_header(
         search_bytes: Number of bytes to scan from start of file for header
 
     Returns:
-        Dictionary containing parsed header information
+        Tuple of (header_info dict, header_text string)
     """
     header_info = {}
 
@@ -145,7 +145,7 @@ def parse_header(
                 header_info["firmware_commit"] = parts[1].strip()
 
     logger.info(f"Parsed header: {header_info}")
-    return header_info
+    return header_info, header_text
 
 
 def unwrap_array(
@@ -1158,6 +1158,8 @@ def save_decoded_data(
     imu_list: list,
     output_dir: Path,
     base_name: str,
+    header_info: dict[str, Any],
+    header_text: str,
     unwrap_stats: dict | None = None,
 ) -> dict[str, Path]:
     """Save decoded data to compressed numpy archive.
@@ -1166,6 +1168,8 @@ def save_decoded_data(
         pps_list, gnss_list, imu_list: Parsed data lists
         output_dir: Directory to save files
         base_name: Base name for output file
+        header_info: Dictionary of parsed header values
+        header_text: Full header text string
         unwrap_stats: Optional unwrap statistics to include in return
         
     Returns:
@@ -1180,9 +1184,32 @@ def save_decoded_data(
     gnss_array = np.array(gnss_list, dtype=object)
     imu_array = np.array(imu_list, dtype=object)
     
+    # Prepare header data for storage
+    header_string_array = np.array([header_text], dtype=object)
+    
+    # Create individual arrays for each header value
+    save_dict = {
+        "pps": pps_array,
+        "gnss": gnss_array,
+        "imu": imu_array,
+        "header_string": header_string_array,
+    }
+    
+    # Add individual header fields as separate arrays
+    if "acc_sensitivity" in header_info:
+        save_dict["acc_sensitivity"] = np.array([header_info["acc_sensitivity"]])
+    if "gyr_sensitivity" in header_info:
+        save_dict["gyr_sensitivity"] = np.array([header_info["gyr_sensitivity"]])
+    if "imu_odr" in header_info:
+        save_dict["imu_odr"] = np.array([header_info["imu_odr"]])
+    if "gnss_rate" in header_info:
+        save_dict["gnss_rate"] = np.array([header_info["gnss_rate"]])
+    if "firmware_commit" in header_info:
+        save_dict["firmware_commit"] = np.array([header_info["firmware_commit"]], dtype=object)
+    
     # Save as single compressed file
     npz_file = output_dir / f"{base_name}.npz"
-    np.savez_compressed(npz_file, pps=pps_array, gnss=gnss_array, imu=imu_array)
+    np.savez_compressed(npz_file, **save_dict)
     output_files["file"] = npz_file
     logger.info(f"Saved decoded data to {npz_file} (compressed)")
     
@@ -1238,7 +1265,7 @@ def decode_file(
         output_dir = input_file.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    header_info = parse_header(input_file, markers=(pps_marker, gps_marker, imu_marker))
+    header_info, header_text = parse_header(input_file, markers=(pps_marker, gps_marker, imu_marker))
 
     with open(input_file, "rb") as f:
         content = f.read()
@@ -1341,4 +1368,7 @@ def decode_file(
     print_summary_statistics(pps_list, gnss_list, imu_list, unwrap_stats=unwrap_stats)
 
     # Save results and return file paths with unwrap stats
-    return save_decoded_data(pps_list, gnss_list, imu_list, output_dir, input_file.stem, unwrap_stats)
+    return save_decoded_data(
+        pps_list, gnss_list, imu_list, output_dir, input_file.stem,
+        header_info, header_text, unwrap_stats
+    )
