@@ -991,6 +991,8 @@ void setup() {
   sd_card_manager.stop();
   wdt.restart();
 
+  NVIC_SystemReset();
+
   SERIAL_USB->println(F("Entering infinite loop to trigger watchdog reset..."));
 
   while (true)
