@@ -51,6 +51,8 @@ static constexpr bool ENABLE_BOOT_COUNTER = true;          ///< Enable boot coun
 static constexpr bool ENABLE_GNSS_START = true;                    ///< Enable GNSS module
 static constexpr bool ENABLE_DEBUG_FASTPRINT = false;
 
+static constexpr bool USE_BURSTMODE = true;
+
 TwoWire * I2C_QWIIC = &Wire1;
 
 static constexpr int PIN_LOG_PPS = 11; // Pin to log PPS signal from GNSS
@@ -267,14 +269,66 @@ void isr_PPS() {
   }
 }
 
+class FrequencyChecker {
+  public:
+    void start(float expected_frequency_hz, int numbers_in_a_row, float tolerance_percent=30.0f);
+    bool check(float current_frequency_hz);
+
+  private:
+    float expected_frequency_hz_;
+    float tolerance_percent_;
+    int numbers_in_a_row_;
+    int count_bad_in_a_row_ {0};
+};
+
+void FrequencyChecker::start(float expected_frequency_hz, int numbers_in_a_row, float tolerance_percent){
+  expected_frequency_hz_ = expected_frequency_hz;
+  numbers_in_a_row_ = numbers_in_a_row;
+  tolerance_percent_ = tolerance_percent;
+}
+
+bool FrequencyChecker::check(float current_frequency_hz){
+  if (current_frequency_hz < expected_frequency_hz_ * (1.0 - tolerance_percent_ / 100.0) || current_frequency_hz > expected_frequency_hz_ * (1.0 + tolerance_percent_ / 100.0)){
+    SERIAL_USB->print(F("WARNING: frequency out of range! Current: "));
+    SERIAL_USB->print(current_frequency_hz);
+    SERIAL_USB->print(F(" Hz; expected: "));
+    SERIAL_USB->print(expected_frequency_hz_);
+    SERIAL_USB->print(F(" Hz; tolerance: +/-"));
+    SERIAL_USB->print(tolerance_percent_);
+    SERIAL_USB->println(F("%"));
+
+    count_bad_in_a_row_++;
+
+    if (count_bad_in_a_row_ >= numbers_in_a_row_){
+      return false;
+    }
+  }
+  else {
+    count_bad_in_a_row_ = 0;
+  }
+
+  return true;
+}
+
+FrequencyChecker gnss_frequency_checker;
+FrequencyChecker pps_frequency_checker;
+FrequencyChecker imu_frequency_checker;
+
 void setup() {
+
+  gnss_frequency_checker.start(GNSS_FREQUENCY_HZ, 45, 50.0f);
+  pps_frequency_checker.start(1.0f, 45, 50.0f);
+  imu_frequency_checker.start(ISM330DHCX_ODR_HZ, 5, 30.0f);
+
   /////////////////////////////////////////////////////////////////////////////////
   // Initialize watchdog timer
   // Set WDT to 1 Hz, interrupt at 64 ticks, reset at 128 ticks; slow as pre allocate can take quite a while it seems
   wdt.configure(WDT_1HZ, 64, 64);
   wdt.start();
 
-  enableBurstMode();
+  if (USE_BURSTMODE){
+    enableBurstMode();
+  }
   
   // Initialize RTC AFTER burst mode is enabled
   // This ensures timing is correctly configured for the 96MHz clock
@@ -794,6 +848,25 @@ void setup() {
         SERIAL_USB->print(F(" ms over "));
         SERIAL_USB->print(time_between_stats_millis);
         SERIAL_USB->println(F(" ms interval"));
+
+        if (!imu_frequency_checker.check(effective_imu_logging_rate_hz)){
+          SERIAL_USB->println(F("ERROR: Effective IMU logging frequency is out of expected range!"));
+          sd_card_manager.close_and_sync_file();
+          delay(2000);
+          NVIC_SystemReset();
+        }
+        if (!gnss_frequency_checker.check(effective_gnss_logging_rate_hz)){
+          SERIAL_USB->println(F("ERROR: Effective GNSS logging frequency is out of expected range!"));
+          sd_card_manager.close_and_sync_file();
+          delay(2000);
+          NVIC_SystemReset();
+        }
+        if (!pps_frequency_checker.check(effective_pps_logging_rate_hz)){
+          SERIAL_USB->println(F("ERROR: Effective PPS logging frequency is out of expected range!"));
+          sd_card_manager.close_and_sync_file();
+          delay(2000);
+          NVIC_SystemReset();
+        }
 
         accumulated_sd_time_millis = 0;
 
