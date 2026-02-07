@@ -455,6 +455,9 @@ void setup() {
 
     SERIAL_USB->println(F("Starting I2C QWIIC..."));
     pinMode(PIN_QWIIC_PWR, OUTPUT);
+    digitalWrite(PIN_QWIIC_PWR, LOW); // Ensure power is off before starting
+    delay(1000); // Wait for power to stabilize
+    wdt.restart();
     digitalWrite(PIN_QWIIC_PWR, HIGH); 
     delay(100);
     wdt.restart();
@@ -990,6 +993,11 @@ void setup() {
   delay(5000);
   sd_card_manager.stop();
   wdt.restart();
+
+  pinMode(PIN_QWIIC_PWR, OUTPUT);
+  digitalWrite(PIN_QWIIC_PWR, LOW);
+
+  delay(1000);
 
   NVIC_SystemReset();
 
