@@ -672,7 +672,16 @@ void setup() {
   deque_IMU_readings.clear();
 
   // Start doing the logging to the SD card
-  sd_card_manager.start();
+  if (!sd_card_manager.start()) {
+    SERIAL_USB->println(F("FATAL ERROR: Failed to start SD card manager!"));
+    SERIAL_USB->println(F("Entering infinite loop to trigger watchdog reset..."));
+    while (true) {
+      delay(1000);
+      NVIC_SystemReset();
+      // Watchdog will reset the board
+    }
+  }
+  wdt.restart();
 
   uint32_t posix_timestamp;
   uint32_t posix_timestamp_next_file;
@@ -691,6 +700,8 @@ void setup() {
       SERIAL_USB->println(F("Log file opened and preallocated successfully."));
     } else {
       SERIAL_USB->println(F("ERROR: Failed to open and preallocate log file on SD card."));
+      delay(5000);
+      NVIC_SystemReset();
       break;
     }
     wdt.restart();
