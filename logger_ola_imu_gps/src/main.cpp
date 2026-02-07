@@ -659,6 +659,7 @@ void setup() {
     SERIAL_USB->println(F("Entering infinite loop to trigger watchdog reset..."));
     while (true) {
       delay(1000);
+      NVIC_SystemReset();
       // Watchdog will reset the board
     }
   }
@@ -999,14 +1000,13 @@ void setup() {
 
   delay(1000);
 
-  NVIC_SystemReset();
-
   SERIAL_USB->println(F("Entering infinite loop to trigger watchdog reset..."));
 
   while (true)
   {
     // reboot
     delay(1000);
+    NVIC_SystemReset();
   }
 
 }
@@ -1014,4 +1014,6 @@ void setup() {
 void loop() {
   // we should never get here
   // if we get here, the watchdog will eventually restart the board
+  delay(1000);
+  NVIC_SystemReset();
 }
