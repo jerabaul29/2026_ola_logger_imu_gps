@@ -269,6 +269,36 @@ void isr_PPS() {
   }
 }
 
+class ConditionChecker {
+  public:
+    void start(int number_in_a_row);
+    bool check(bool condition_met);
+  private:
+    int number_in_a_row_;
+    int count_bad_in_a_row_ {0};
+};
+
+void ConditionChecker::start(int number_in_a_row){
+  count_bad_in_a_row_ = 0;
+  number_in_a_row_ = number_in_a_row;
+}
+
+bool ConditionChecker::check(bool condition_met){
+  if (!condition_met){
+    count_bad_in_a_row_++;
+    if (count_bad_in_a_row_ >= number_in_a_row_){
+      return false;
+    }
+  }
+  else {
+    count_bad_in_a_row_ = 0;
+  }
+
+  return true;
+}
+
+ConditionChecker sd_not_saturated_checker;
+
 class FrequencyChecker {
   public:
     void start(float expected_frequency_hz, int numbers_in_a_row, float tolerance_percent=30.0f);
@@ -319,6 +349,7 @@ void setup() {
   gnss_frequency_checker.start(GNSS_FREQUENCY_HZ, 45, 50.0f);
   pps_frequency_checker.start(1.0f, 45, 50.0f);
   imu_frequency_checker.start(ISM330DHCX_ODR_HZ, 5, 30.0f);
+  sd_not_saturated_checker.start(6);
 
   /////////////////////////////////////////////////////////////////////////////////
   // Initialize watchdog timer
@@ -885,6 +916,14 @@ void setup() {
         }
         if (!pps_frequency_checker.check(effective_pps_logging_rate_hz)){
           SERIAL_USB->println(F("ERROR: Effective PPS logging frequency is out of expected range!"));
+          sd_card_manager.close_and_sync_file();
+          delay(2000);
+          NVIC_SystemReset();
+        }
+
+        bool sd_not_saturated = accumulated_sd_time_millis < 8000;
+        if (!sd_not_saturated_checker.check(sd_not_saturated)){
+          SERIAL_USB->println(F("ERROR: SD card logging is taking too much time!"));
           sd_card_manager.close_and_sync_file();
           delay(2000);
           NVIC_SystemReset();
