@@ -700,8 +700,15 @@ void setup() {
       SERIAL_USB->println(F("Log file opened and preallocated successfully."));
     } else {
       SERIAL_USB->println(F("ERROR: Failed to open and preallocate log file on SD card."));
-      delay(5000);
-      NVIC_SystemReset();
+      delay(1000);
+      sd_card_manager.close_and_sync_file();
+      delay(1000);
+      sd_card_manager.stop();
+      delay(1000);
+      while (true) {
+        delay(1000);
+        NVIC_SystemReset();
+      }
       break;
     }
     wdt.restart();
