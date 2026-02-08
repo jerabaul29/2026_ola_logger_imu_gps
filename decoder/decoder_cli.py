@@ -60,17 +60,20 @@ def main(path: Path) -> None:
 
     # Plot 3: GNSS coordinates
     plot_gnss_coordinates(gnss_data)
+    
+    # Plot 4: GNSS velocities (NED)
+    plot_gnss_velocities(gnss_data)
 
-    # Plot 4: Time differences between consecutive entries
+    # Plot 5: Time differences between consecutive entries
     plot_time_differences(imu_data, gnss_data)
 
-    # Plot 5: PPS mismatch
+    # Plot 6: PPS mismatch
     plot_pps_mismatch(pps_data)
 
-    # Plot 6: IMU counter vs entry number
+    # Plot 7: IMU counter vs entry number
     plot_imu_counter(imu_data, unwrap_stats)
 
-    # Plot 7: Micros data - raw vs cleaned/unwrapped
+    # Plot 8: Micros data - raw vs cleaned/unwrapped
     plot_micros_raw_vs_cleaned(pps_data, gnss_data, imu_data, unwrap_stats)
 
     logger.success("All plots created! Close plot windows to exit.")
@@ -78,7 +81,7 @@ def main(path: Path) -> None:
 
 
 def plot_imu_acceleration(imu_data: np.ndarray) -> None:
-    """Plot 3-axis acceleration data.
+    """Plot 3-axis acceleration data with outliers marked.
 
     Args:
         imu_data: Array of IMUReading objects
@@ -94,6 +97,11 @@ def plot_imu_acceleration(imu_data: np.ndarray) -> None:
     acc_x = np.array([imu.acc_x_mg for imu in imu_data])
     acc_y = np.array([imu.acc_y_mg for imu in imu_data])
     acc_z = np.array([imu.acc_z_mg for imu in imu_data])
+    
+    # Extract outlier flags
+    acc_x_outliers = np.array([imu.acc_x_mg_stdchecked for imu in imu_data])
+    acc_y_outliers = np.array([imu.acc_y_mg_stdchecked for imu in imu_data])
+    acc_z_outliers = np.array([imu.acc_z_mg_stdchecked for imu in imu_data])
 
     # Create figure
     fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
@@ -101,23 +109,32 @@ def plot_imu_acceleration(imu_data: np.ndarray) -> None:
 
     # Plot each axis
     axes[0].plot(time_relative, acc_x, "r-", linewidth=0.5, label="Acc X")
+    if np.any(acc_x_outliers):
+        axes[0].plot(time_relative[acc_x_outliers], acc_x[acc_x_outliers], 
+                     "kx", markersize=8, markeredgewidth=2, label=f"Outliers ({np.sum(acc_x_outliers)})")
     axes[0].set_ylabel("Acc X (mg)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
 
     axes[1].plot(time_relative, acc_y, "g-", linewidth=0.5, label="Acc Y")
+    if np.any(acc_y_outliers):
+        axes[1].plot(time_relative[acc_y_outliers], acc_y[acc_y_outliers], 
+                     "kx", markersize=8, markeredgewidth=2, label=f"Outliers ({np.sum(acc_y_outliers)})")
     axes[1].set_ylabel("Acc Y (mg)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
 
     axes[2].plot(time_relative, acc_z, "b-", linewidth=0.5, label="Acc Z")
+    if np.any(acc_z_outliers):
+        axes[2].plot(time_relative[acc_z_outliers], acc_z[acc_z_outliers], 
+                     "kx", markersize=8, markeredgewidth=2, label=f"Outliers ({np.sum(acc_z_outliers)})")
     axes[2].set_ylabel("Acc Z (mg)")
     axes[2].set_xlabel("Time since start (seconds)")
     axes[2].grid(True, alpha=0.3)
     axes[2].legend()
 
     plt.tight_layout()
-    logger.info("Created acceleration plot")
+    logger.info("Created acceleration plot with outlier markers")
 
 
 def plot_imu_gyroscope(imu_data: np.ndarray) -> None:
@@ -137,6 +154,11 @@ def plot_imu_gyroscope(imu_data: np.ndarray) -> None:
     gyr_x = np.array([imu.gyr_x_mdps for imu in imu_data])
     gyr_y = np.array([imu.gyr_y_mdps for imu in imu_data])
     gyr_z = np.array([imu.gyr_z_mdps for imu in imu_data])
+    
+    # Extract outlier flags
+    gyr_x_outliers = np.array([imu.gyr_x_mdps_stdchecked for imu in imu_data])
+    gyr_y_outliers = np.array([imu.gyr_y_mdps_stdchecked for imu in imu_data])
+    gyr_z_outliers = np.array([imu.gyr_z_mdps_stdchecked for imu in imu_data])
 
     # Create figure
     fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
@@ -144,27 +166,36 @@ def plot_imu_gyroscope(imu_data: np.ndarray) -> None:
 
     # Plot each axis
     axes[0].plot(time_relative, gyr_x, "r-", linewidth=0.5, label="Gyr X")
+    if np.any(gyr_x_outliers):
+        axes[0].plot(time_relative[gyr_x_outliers], gyr_x[gyr_x_outliers], 
+                     "kx", markersize=8, markeredgewidth=2, label=f"Outliers ({np.sum(gyr_x_outliers)})")
     axes[0].set_ylabel("Gyr X (mdps)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
 
     axes[1].plot(time_relative, gyr_y, "g-", linewidth=0.5, label="Gyr Y")
+    if np.any(gyr_y_outliers):
+        axes[1].plot(time_relative[gyr_y_outliers], gyr_y[gyr_y_outliers], 
+                     "kx", markersize=8, markeredgewidth=2, label=f"Outliers ({np.sum(gyr_y_outliers)})")
     axes[1].set_ylabel("Gyr Y (mdps)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
 
     axes[2].plot(time_relative, gyr_z, "b-", linewidth=0.5, label="Gyr Z")
+    if np.any(gyr_z_outliers):
+        axes[2].plot(time_relative[gyr_z_outliers], gyr_z[gyr_z_outliers], 
+                     "kx", markersize=8, markeredgewidth=2, label=f"Outliers ({np.sum(gyr_z_outliers)})")
     axes[2].set_ylabel("Gyr Z (mdps)")
     axes[2].set_xlabel("Time since start (seconds)")
     axes[2].grid(True, alpha=0.3)
     axes[2].legend()
 
     plt.tight_layout()
-    logger.info("Created gyroscope plot")
+    logger.info("Created gyroscope plot with outlier markers")
 
 
 def plot_gnss_coordinates(gnss_data: np.ndarray) -> None:
-    """Plot GNSS coordinates (latitude and longitude over time).
+    """Plot GNSS coordinates (latitude and longitude over time) with outliers marked.
 
     Args:
         gnss_data: Array of GNSSReading objects
@@ -179,6 +210,10 @@ def plot_gnss_coordinates(gnss_data: np.ndarray) -> None:
 
     latitude = np.array([gnss.latitude_dd for gnss in gnss_data])
     longitude = np.array([gnss.longitude_dd for gnss in gnss_data])
+    
+    # Extract outlier flags
+    lat_outliers = np.array([gnss.latitude_dd_stdchecked for gnss in gnss_data])
+    lon_outliers = np.array([gnss.longitude_dd_stdchecked for gnss in gnss_data])
 
     # Create figure with 2 subplots
     fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
@@ -186,19 +221,84 @@ def plot_gnss_coordinates(gnss_data: np.ndarray) -> None:
 
     # Plot latitude
     axes[0].plot(time_relative, latitude, "b-", linewidth=1, label="Latitude")
+    if np.any(lat_outliers):
+        axes[0].plot(time_relative[lat_outliers], latitude[lat_outliers], 
+                     "kx", markersize=10, markeredgewidth=2, label=f"Outliers ({np.sum(lat_outliers)})")
     axes[0].set_ylabel("Latitude (degrees)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
 
     # Plot longitude
     axes[1].plot(time_relative, longitude, "r-", linewidth=1, label="Longitude")
+    if np.any(lon_outliers):
+        axes[1].plot(time_relative[lon_outliers], longitude[lon_outliers], 
+                     "kx", markersize=10, markeredgewidth=2, label=f"Outliers ({np.sum(lon_outliers)})")
     axes[1].set_ylabel("Longitude (degrees)")
     axes[1].set_xlabel("Time since start (seconds)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
 
     plt.tight_layout()
-    logger.info("Created GNSS coordinates plot")
+    logger.info("Created GNSS coordinates plot with outlier markers")
+
+
+def plot_gnss_velocities(gnss_data: np.ndarray) -> None:
+    """Plot GNSS NED velocities over time with outliers marked.
+
+    Args:
+        gnss_data: Array of GNSSReading objects
+    """
+    if len(gnss_data) == 0:
+        logger.warning("No GNSS data to plot")
+        return
+
+    # Extract time and velocity data
+    time_utc = np.array([gnss.utc_timestamp_from_pps_regression for gnss in gnss_data])
+    time_relative = time_utc - time_utc[0]  # Relative time in seconds
+
+    vel_n = np.array([gnss.ned_vel_north_mmps for gnss in gnss_data])
+    vel_e = np.array([gnss.ned_vel_east_mmps for gnss in gnss_data])
+    vel_d = np.array([gnss.ned_vel_down_mmps for gnss in gnss_data])
+    
+    # Extract outlier flags
+    vel_n_outliers = np.array([gnss.ned_vel_north_mmps_stdchecked for gnss in gnss_data])
+    vel_e_outliers = np.array([gnss.ned_vel_east_mmps_stdchecked for gnss in gnss_data])
+    vel_d_outliers = np.array([gnss.ned_vel_down_mmps_stdchecked for gnss in gnss_data])
+
+    # Create figure with 3 subplots
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+    fig.suptitle("GNSS NED Velocities", fontsize=14, fontweight="bold")
+
+    # Plot North velocity
+    axes[0].plot(time_relative, vel_n, "r-", linewidth=1, label="Vel North")
+    if np.any(vel_n_outliers):
+        axes[0].plot(time_relative[vel_n_outliers], vel_n[vel_n_outliers], 
+                     "kx", markersize=10, markeredgewidth=2, label=f"Outliers ({np.sum(vel_n_outliers)})")
+    axes[0].set_ylabel("Vel North (mm/s)")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+
+    # Plot East velocity
+    axes[1].plot(time_relative, vel_e, "g-", linewidth=1, label="Vel East")
+    if np.any(vel_e_outliers):
+        axes[1].plot(time_relative[vel_e_outliers], vel_e[vel_e_outliers], 
+                     "kx", markersize=10, markeredgewidth=2, label=f"Outliers ({np.sum(vel_e_outliers)})")
+    axes[1].set_ylabel("Vel East (mm/s)")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+
+    # Plot Down velocity
+    axes[2].plot(time_relative, vel_d, "b-", linewidth=1, label="Vel Down")
+    if np.any(vel_d_outliers):
+        axes[2].plot(time_relative[vel_d_outliers], vel_d[vel_d_outliers], 
+                     "kx", markersize=10, markeredgewidth=2, label=f"Outliers ({np.sum(vel_d_outliers)})")
+    axes[2].set_ylabel("Vel Down (mm/s)")
+    axes[2].set_xlabel("Time since start (seconds)")
+    axes[2].grid(True, alpha=0.3)
+    axes[2].legend()
+
+    plt.tight_layout()
+    logger.info("Created GNSS velocities plot with outlier markers")
 
 
 def plot_time_differences(imu_data: np.ndarray, gnss_data: np.ndarray) -> None:

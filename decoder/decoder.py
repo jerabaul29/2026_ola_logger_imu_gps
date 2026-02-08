@@ -69,6 +69,12 @@ class GNSSReading:
     micros_reading_unwrapped: int | None = None
     utc_timestamp_from_pps_regression: float | None = None
     datetime_timestamp_from_pps_regression: datetime | None = None
+    # Outlier detection flags
+    latitude_dd_stdchecked: bool = False
+    longitude_dd_stdchecked: bool = False
+    ned_vel_north_mmps_stdchecked: bool = False
+    ned_vel_east_mmps_stdchecked: bool = False
+    ned_vel_down_mmps_stdchecked: bool = False
 
 
 @dataclass
@@ -93,6 +99,13 @@ class IMUReading:
     counter_unwrapped: int | None = None
     utc_timestamp_from_pps_regression: float | None = None
     datetime_timestamp_from_pps_regression: datetime | None = None
+    # Outlier detection flags
+    acc_x_mg_stdchecked: bool = False
+    acc_y_mg_stdchecked: bool = False
+    acc_z_mg_stdchecked: bool = False
+    gyr_x_mdps_stdchecked: bool = False
+    gyr_y_mdps_stdchecked: bool = False
+    gyr_z_mdps_stdchecked: bool = False
 
 
 def parse_header(
@@ -256,6 +269,95 @@ def unwrap_array(
     last_raw_value = int(values[-1]) if len(values) > 0 else None
 
     return unwrapped, wrap_indices, jump_indices, offset, last_raw_value
+
+
+def detect_outliers_stdcheck(
+    values: np.ndarray,
+    n_neighbors: int = 6,
+    n_sigma: float = 5.0
+) -> np.ndarray:
+    """Detect outliers in a time series using neighboring values statistics.
+    
+    For each point in the time series, computes statistics from its N nearest
+    neighbors and flags points that deviate by more than n_sigma standard
+    deviations from the local mean.
+    
+    Algorithm:
+    1. For each index i, find N closest neighboring indices
+       - Interior points: symmetric neighbors (e.g., i-3, i-2, i-1, i+1, i+2, i+3 for N=6)
+       - Edge points: asymmetric neighbors (e.g., i-1, i+1, i+2, i+3, i+4, i+5)
+    2. Compute mean and std from these neighbors (excluding point i itself)
+    3. Flag point i if |value[i] - mean| > n_sigma * std
+    
+    Args:
+        values: 1D array of time series values
+        n_neighbors: Number of neighbors to use for statistics (default: 6)
+        n_sigma: Number of standard deviations for outlier threshold (default: 5.0)
+        
+    Returns:
+        Array of indices where outliers were detected (empty if none found)
+        
+    Example:
+        >>> data = np.array([1.0, 1.1, 1.0, 10.0, 0.9, 1.1, 1.0])
+        >>> outliers = detect_outliers_stdcheck(data, n_neighbors=6, n_sigma=5.0)
+        >>> outliers
+        array([3])  # Index 3 (value=10.0) is an outlier
+    """
+    if len(values) < n_neighbors + 1:
+        # Not enough data points for outlier detection
+        return np.array([], dtype=np.int64)
+    
+    outlier_indices = []
+    n = len(values)
+    
+    # Number of neighbors on each side (for symmetric case)
+    half_neighbors = n_neighbors // 2
+    
+    for i in range(n):
+        # Determine neighbor indices based on position
+        if i < half_neighbors:
+            # Near start: take neighbors to the right
+            neighbor_start = 0
+            neighbor_end = min(n_neighbors + 1, n)
+        elif i >= n - half_neighbors:
+            # Near end: take neighbors to the left
+            neighbor_start = max(0, n - n_neighbors - 1)
+            neighbor_end = n
+        else:
+            # Interior: symmetric neighbors
+            neighbor_start = i - half_neighbors
+            neighbor_end = i + half_neighbors + 1
+        
+        # Get neighbor values (excluding the point itself)
+        neighbor_indices = list(range(neighbor_start, neighbor_end))
+        if i in neighbor_indices:
+            neighbor_indices.remove(i)
+        
+        # Ensure we have exactly n_neighbors (or as many as possible)
+        neighbor_indices = neighbor_indices[:n_neighbors]
+        
+        if len(neighbor_indices) < 2:
+            # Need at least 2 neighbors to compute std
+            continue
+            
+        neighbor_values = values[neighbor_indices]
+        
+        # Compute statistics from neighbors
+        mean_val = np.mean(neighbor_values)
+        std_val = np.std(neighbor_values, ddof=1)  # Use sample std
+        
+        # Check if current value is an outlier
+        deviation = abs(values[i] - mean_val)
+        if std_val > 0:
+            # Normal case: check if deviation exceeds threshold
+            if deviation > n_sigma * std_val:
+                outlier_indices.append(i)
+        else:
+            # When std is 0 (all neighbors identical), flag if value differs from mean
+            if deviation > 0:
+                outlier_indices.append(i)
+    
+    return np.array(outlier_indices, dtype=np.int64)
 
 
 def compute_pps_regression(
@@ -1593,6 +1695,79 @@ def decode_file(
             f"Segment {seg_idx}: {len(pps_list)} PPS, "
             f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries"
         )
+        
+        # Apply outlier detection to physical variables
+        # IMU acceleration and gyroscope
+        if imu_list and len(imu_list) > 4:
+            acc_x_values = np.array([i.acc_x_mg for i in imu_list])
+            acc_y_values = np.array([i.acc_y_mg for i in imu_list])
+            acc_z_values = np.array([i.acc_z_mg for i in imu_list])
+            gyr_x_values = np.array([i.gyr_x_mdps for i in imu_list])
+            gyr_y_values = np.array([i.gyr_y_mdps for i in imu_list])
+            gyr_z_values = np.array([i.gyr_z_mdps for i in imu_list])
+            
+            acc_x_outliers = detect_outliers_stdcheck(acc_x_values)
+            acc_y_outliers = detect_outliers_stdcheck(acc_y_values)
+            acc_z_outliers = detect_outliers_stdcheck(acc_z_values)
+            gyr_x_outliers = detect_outliers_stdcheck(gyr_x_values)
+            gyr_y_outliers = detect_outliers_stdcheck(gyr_y_values)
+            gyr_z_outliers = detect_outliers_stdcheck(gyr_z_values)
+            
+            # Flag outliers in the data structures
+            for idx in acc_x_outliers:
+                imu_list[idx].acc_x_mg_stdchecked = True
+            for idx in acc_y_outliers:
+                imu_list[idx].acc_y_mg_stdchecked = True
+            for idx in acc_z_outliers:
+                imu_list[idx].acc_z_mg_stdchecked = True
+            for idx in gyr_x_outliers:
+                imu_list[idx].gyr_x_mdps_stdchecked = True
+            for idx in gyr_y_outliers:
+                imu_list[idx].gyr_y_mdps_stdchecked = True
+            for idx in gyr_z_outliers:
+                imu_list[idx].gyr_z_mdps_stdchecked = True
+            
+            n_acc_outliers = len(acc_x_outliers) + len(acc_y_outliers) + len(acc_z_outliers)
+            n_gyr_outliers = len(gyr_x_outliers) + len(gyr_y_outliers) + len(gyr_z_outliers)
+            if n_acc_outliers > 0 or n_gyr_outliers > 0:
+                logger.info(
+                    f"Segment {seg_idx} IMU outliers detected: "
+                    f"{n_acc_outliers} acceleration, {n_gyr_outliers} gyroscope"
+                )
+        
+        # GNSS position and velocity
+        if gnss_list and len(gnss_list) > 4:
+            lat_values = np.array([g.latitude_dd for g in gnss_list])
+            lon_values = np.array([g.longitude_dd for g in gnss_list])
+            vel_n_values = np.array([g.ned_vel_north_mmps for g in gnss_list])
+            vel_e_values = np.array([g.ned_vel_east_mmps for g in gnss_list])
+            vel_d_values = np.array([g.ned_vel_down_mmps for g in gnss_list])
+            
+            lat_outliers = detect_outliers_stdcheck(lat_values)
+            lon_outliers = detect_outliers_stdcheck(lon_values)
+            vel_n_outliers = detect_outliers_stdcheck(vel_n_values)
+            vel_e_outliers = detect_outliers_stdcheck(vel_e_values)
+            vel_d_outliers = detect_outliers_stdcheck(vel_d_values)
+            
+            # Flag outliers in the data structures
+            for idx in lat_outliers:
+                gnss_list[idx].latitude_dd_stdchecked = True
+            for idx in lon_outliers:
+                gnss_list[idx].longitude_dd_stdchecked = True
+            for idx in vel_n_outliers:
+                gnss_list[idx].ned_vel_north_mmps_stdchecked = True
+            for idx in vel_e_outliers:
+                gnss_list[idx].ned_vel_east_mmps_stdchecked = True
+            for idx in vel_d_outliers:
+                gnss_list[idx].ned_vel_down_mmps_stdchecked = True
+            
+            n_pos_outliers = len(lat_outliers) + len(lon_outliers)
+            n_vel_outliers = len(vel_n_outliers) + len(vel_e_outliers) + len(vel_d_outliers)
+            if n_pos_outliers > 0 or n_vel_outliers > 0:
+                logger.info(
+                    f"Segment {seg_idx} GNSS outliers detected: "
+                    f"{n_pos_outliers} position, {n_vel_outliers} velocity"
+                )
 
     # Print overall summary statistics
     total_pps = sum(len(seg['pps_list']) for seg in segments)
