@@ -1058,11 +1058,16 @@ def process_imu_entry(
     imu_struct_size: int,
     acc_sensitivity: float,
     gyr_sensitivity: float,
-) -> tuple[int, bool]:
+    prev_imu_micros: int | None = None,
+) -> tuple[int, bool, bool]:
     """Process a single IMU entry.
     
+    Args:
+        prev_imu_micros: Previous IMU micros value for jump detection (None if first in segment)
+    
     Returns:
-        Tuple of (new_idx, should_break)
+        Tuple of (new_idx, should_break, jump_detected)
+        - jump_detected: True if a micros jump was detected that should trigger segmentation
     """
     # Check we have enough bytes
     line_end = idx + IMU_LINE_SIZE
@@ -1075,13 +1080,36 @@ def process_imu_entry(
             f"File truncated. Parsed {len(pps_list)} PPS, "
             f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before truncation"
         )
-        return idx, True
+        return idx, True, False
     
     # Parse entry
     idx += 4
     imu_data = content[idx : idx + imu_struct_size]
     try:
         imu_entry = parse_imu_entry(imu_data, acc_sensitivity, gyr_sensitivity)
+        
+        # Check for micros jump if we have previous value
+        jump_detected = False
+        if prev_imu_micros is not None:
+            micros_diff = imu_entry.micros_reading - prev_imu_micros
+            
+            # Check for negative jump (backwards in time)
+            if micros_diff < 0:
+                logger.warning(
+                    f"IMU micros negative jump detected at offset {idx}: "
+                    f"{prev_imu_micros} → {imu_entry.micros_reading} "
+                    f"(diff={micros_diff} µs). Starting new segment."
+                )
+                jump_detected = True
+            # Check for large positive jump (> 1 second = 1,000,000 µs)
+            elif micros_diff > 1_000_000:
+                logger.warning(
+                    f"IMU micros large jump detected at offset {idx}: "
+                    f"{prev_imu_micros} → {imu_entry.micros_reading} "
+                    f"(diff={micros_diff} µs = {micros_diff/1e6:.3f}s). Starting new segment."
+                )
+                jump_detected = True
+        
         imu_list.append(imu_entry)
     except (struct.error, AssertionError) as e:
         logger.warning(f"Failed to parse IMU entry at offset {idx}: {e}")
@@ -1096,7 +1124,7 @@ def process_imu_entry(
     if idx < len(content):
         next_byte = content[idx]
         if next_byte == ord(b'\n') or footer_marker in content[idx:idx+20]:
-            return idx, False
+            return idx, False, jump_detected
         else:
             # Handle junk bytes
             new_idx, should_break = handle_junk_bytes(
@@ -1104,9 +1132,9 @@ def process_imu_entry(
                 (pps_marker, gps_marker, imu_marker, footer_marker),
                 footer_marker, pps_list, gnss_list, imu_list
             )
-            return new_idx, should_break
+            return new_idx, should_break, jump_detected
     
-    return idx, False
+    return idx, False, jump_detected
 
 
 def parse_binary_content(
@@ -1119,8 +1147,9 @@ def parse_binary_content(
 ) -> list[dict[str, list]]:
     """Parse binary content and extract all PPS, GNSS, and IMU entries in segments.
     
-    Segments are created based on IMU count: once n_imus_per_segment is reached,
-    a new segment starts. All data types switch to the new segment based on file order.
+    Segments are created based on two conditions:
+    1. Time-based: once n_imus_per_segment IMU entries are reached (~1 minute)
+    2. Jump-based: when IMU micros has a negative jump or positive jump > 1 second
     
     Args:
         content: Full file content as bytes
@@ -1137,6 +1166,7 @@ def parse_binary_content(
     # Calculate segment size: 1 minute of IMU samples
     n_imus_per_segment = round(imu_odr * 60)
     logger.info(f"Segment size: {n_imus_per_segment} IMU samples (≈1 minute at {imu_odr} Hz)")
+    logger.info("Additional segmentation on IMU micros jumps: negative or > 1 second")
     
     pps_struct_size = PPS_STRUCT_SIZE
     gps_struct_size = GPS_STRUCT_SIZE
@@ -1147,20 +1177,22 @@ def parse_binary_content(
     current_segment = {'pps_list': [], 'gnss_list': [], 'imu_list': []}
     segments.append(current_segment)
     segment_imu_count = 0
+    prev_imu_micros = None  # Track previous IMU micros for jump detection
     
     start_offset = 0
     idx = 0
     while idx < len(content):
-        # Check if we need to start a new segment
+        # Check if we need to start a new segment based on time
         if segment_imu_count >= n_imus_per_segment:
             logger.info(
                 f"Starting segment {len(segments)} at byte {idx} "
                 f"(segment {len(segments)-1} had {segment_imu_count} IMUs, "
-                f"{len(current_segment['pps_list'])} PPS, {len(current_segment['gnss_list'])} GNSS)"
+                f"{len(current_segment['pps_list'])} PPS, {len(current_segment['gnss_list'])} GNSS) - TIME THRESHOLD"
             )
             current_segment = {'pps_list': [], 'gnss_list': [], 'imu_list': []}
             segments.append(current_segment)
             segment_imu_count = 0
+            prev_imu_micros = None  # Reset for new segment
         
         if content[idx : idx + 4] == pps_marker:
             idx, should_break = process_pps_entry(
@@ -1181,16 +1213,36 @@ def parse_binary_content(
                 break
                 
         elif content[idx : idx + 4] == imu_marker:
-            idx, should_break = process_imu_entry(
+            idx, should_break, jump_detected = process_imu_entry(
                 content, idx, current_segment['pps_list'], current_segment['gnss_list'], current_segment['imu_list'],
                 pps_marker, gps_marker, imu_marker, footer_marker,
-                imu_struct_size, acc_sensitivity, gyr_sensitivity
+                imu_struct_size, acc_sensitivity, gyr_sensitivity,
+                prev_imu_micros
             )
             if should_break:
                 break
-            # Increment IMU count after successful processing
-            if not should_break:
+            
+            # Check if jump was detected and we should start a new segment
+            if jump_detected and len(current_segment['imu_list']) > 0:
+                # Move the current IMU entry (which has the jump) to a new segment
+                jumped_imu_entry = current_segment['imu_list'].pop()
+                
+                logger.info(
+                    f"Starting segment {len(segments)} at byte {idx} "
+                    f"(segment {len(segments)-1} had {segment_imu_count} IMUs, "
+                    f"{len(current_segment['pps_list'])} PPS, {len(current_segment['gnss_list'])} GNSS) - MICROS JUMP"
+                )
+                
+                # Start new segment with the jumped entry
+                current_segment = {'pps_list': [], 'gnss_list': [], 'imu_list': [jumped_imu_entry]}
+                segments.append(current_segment)
+                segment_imu_count = 1
+                prev_imu_micros = jumped_imu_entry.micros_reading
+            else:
+                # Normal processing
                 segment_imu_count += 1
+                if len(current_segment['imu_list']) > 0:
+                    prev_imu_micros = current_segment['imu_list'][-1].micros_reading
                 
         elif footer_marker in content[idx : idx + len(footer_marker) + 10]:
             logger.info("Found footer marker, stopping parsing")
