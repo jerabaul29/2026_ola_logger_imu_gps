@@ -14,7 +14,7 @@
 ## Code and data organization
 
 - the `./decoder.py` module contains all the utilities to easily decode a single data file at a time
-- the file `./DATA_BOOT_0055_TIME_20260120T211500.dat` contains an example of data file
+- several example data files are available (e.g., `DATA_BOOT_0000_TIME_20260204T193000.dat`)
 - the `./example_decode.py` script contains an example of how to decode the data file using the decoder functions
 - the `./simple_example.py` script is the **recommended starting point** for end users - shows clean, simple workflow
 - the `./test_decoder.py` module contains the tests to run

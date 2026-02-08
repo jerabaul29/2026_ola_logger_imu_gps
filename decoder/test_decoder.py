@@ -1,5 +1,6 @@
 """Tests for the decoder module."""
 
+import os
 import struct
 from pathlib import Path
 
@@ -614,6 +615,53 @@ def test_bad_regression_filtering():
         # We expect all 16-17 segments to be valid
         assert len(data['imu']) > 150000, \
             f"Should have most IMU data (~198K expected), got {len(data['imu'])}"
+
+
+def test_simple_example_script():
+    """Test that simple_example.py runs without errors.
+    
+    This ensures the recommended user-facing example remains functional.
+    """
+    from pathlib import Path
+    import subprocess
+    import sys
+    
+    # Check if the example data file exists
+    test_file = Path("DATA_BOOT_0000_TIME_20260204T193000.dat")
+    if not test_file.exists():
+        pytest.skip("Test data file not available")
+    
+    # Run the simple_example.py script
+    # Use subprocess to run it in a separate process
+    script_path = Path(__file__).parent / "simple_example.py"
+    
+    # Set MPLBACKEND to non-interactive backend to avoid hanging on plt.show()
+    env = {'MPLBACKEND': 'Agg', 'PATH': os.environ.get('PATH', '')}
+    
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,  # 2 minute timeout
+        env=env,
+        cwd=Path(__file__).parent
+    )
+    
+    # Check that the script ran successfully
+    assert result.returncode == 0, \
+        f"simple_example.py failed with return code {result.returncode}.\n" \
+        f"STDOUT:\n{result.stdout}\n" \
+        f"STDERR:\n{result.stderr}"
+    
+    # Check for expected output strings
+    assert "Decoding:" in result.stdout or "Decoding:" in result.stderr, \
+        "Expected 'Decoding:' in output"
+    assert "DECODED DATA SUMMARY" in result.stdout, \
+        "Expected 'DECODED DATA SUMMARY' in output"
+    assert "CREATING PLOTS" in result.stdout, \
+        "Expected 'CREATING PLOTS' in output"
+    assert "Done!" in result.stdout, \
+        "Expected 'Done!' in output"
 
 
 

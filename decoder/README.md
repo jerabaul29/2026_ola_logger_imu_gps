@@ -75,7 +75,7 @@ This script demonstrates the recommended workflow:
 2. **Load** the `.npz` file as numpy arrays
 3. **Analyze** and plot the data
 
-The `simple_example.py` script shows clean, user-friendly code that you can adapt for your own analysis. It produces 3 plots: acceleration, gyroscope, and GPS track.
+The `simple_example.py` script shows clean, user-friendly code that you can adapt for your own analysis. It produces 4 plots: acceleration, gyroscope, GPS track, and GNSS velocities (all with outlier detection).
 
 ### Command-Line Interface (CLI)
 
@@ -83,7 +83,7 @@ For quick visualization and inspection without writing code:
 
 ```bash
 # Decode file and display 8 plots
-python decoder_cli.py -p DATA_BOOT_0055_TIME_20260120T211500.dat
+python decoder_cli.py -p DATA_BOOT_0000_TIME_20260204T193000.dat
 
 # Show help
 python decoder_cli.py --help
@@ -110,7 +110,7 @@ from pathlib import Path
 from decoder import decode_file, load_data_as_arrays
 
 # Decode the .dat file (creates .npz file)
-result = decode_file(Path("DATA_BOOT_0055_TIME_20260120T211500.dat"))
+result = decode_file(Path("DATA_BOOT_0000_TIME_20260204T193000.dat"))
 npz_file = result['file']
 ```
 
@@ -384,6 +384,7 @@ See `SPEC.md` for detailed information about the binary file format.
 
 **Decode and analyze in 3 lines:**
 ```python
+from pathlib import Path
 from decoder import decode_file, load_data_as_arrays
 result = decode_file(Path("data.dat"))
 data = load_data_as_arrays(result['file'])

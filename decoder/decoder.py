@@ -1694,9 +1694,14 @@ def load_and_combine_segments(npz_file: Path) -> dict[str, Any]:
     
     # Copy header info (non-segment data)
     for key in data.keys():
-        if not key.startswith('pps') and not key.startswith('gnss') and not key.startswith('imu'):
-            if key != 'number_of_segments':
-                result[key] = data[key]
+        # Skip segment arrays (these have _segmentXXX suffix)
+        if '_segment' in key:
+            continue
+        # Skip data arrays we've already processed
+        if key in ['pps', 'gnss', 'imu', 'number_of_segments']:
+            continue
+        # Copy all other keys (header info)
+        result[key] = data[key]
     
     return result
 
