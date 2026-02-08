@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from loguru import logger
 
-from decoder import decode_file
+from decoder import decode_file, load_and_combine_segments
 
 
 @click.command()
@@ -42,10 +42,10 @@ def main(path: Path) -> None:
     # Load the decoded data from compressed archive
     logger.info("Loading decoded data for visualization...")
     npz_file = output_files["file"]
-    with np.load(npz_file, allow_pickle=True) as data:
-        pps_data = data["pps"]
-        gnss_data = data["gnss"]
-        imu_data = data["imu"]
+    combined = load_and_combine_segments(npz_file)
+    pps_data = combined["pps"]
+    gnss_data = combined["gnss"]
+    imu_data = combined["imu"]
 
     logger.info(f"Loaded {len(pps_data)} PPS, {len(gnss_data)} GNSS, {len(imu_data)} IMU entries")
 

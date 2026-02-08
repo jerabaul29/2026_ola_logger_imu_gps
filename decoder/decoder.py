@@ -153,7 +153,9 @@ def unwrap_array(
     max_value: int,
     wrap_threshold: float | None = None,
     jump_threshold: float | None = None,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
+    initial_offset: int = 0,
+    prev_raw_value: int | None = None,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, int, int | None]:
     """Unwrap potentially wrapping array and detect anomalous jumps.
 
     Handles overflow in fixed-width integer timestamps (uint32_t micros, uint16_t counters)
@@ -174,23 +176,27 @@ def unwrap_array(
                        (default: 0.75 * max_value, meaning negative jumps > 75% are wraps)
         jump_threshold: Threshold for anomalous jump detection
                        (default: 0.1 * max_value for timestamps, 1 for counters)
+        initial_offset: Initial unwrap offset from previous segment (default: 0)
+        prev_raw_value: Last raw value from previous segment for wrap detection at boundary
 
     Returns:
         Tuple of:
         - unwrapped_array: Array with wrapping corrected (int64 to avoid overflow)
         - wrap_indices: Indices where wraps occurred (None if no wraps detected)
         - jump_indices: Indices where anomalous jumps occurred (None if no jumps detected)
+        - final_offset: Final unwrap offset to pass to next segment
+        - last_raw_value: Last raw value to pass to next segment
 
     Example:
         >>> values = np.array([2**32-1000, 2**32-500, 100])  # Wraps at index 2
-        >>> unwrapped, wraps, jumps = unwrap_array(values, max_value=2**32)
+        >>> unwrapped, wraps, jumps, final_offset, last_raw = unwrap_array(values, max_value=2**32)
         >>> unwrapped
         array([4294966296, 4294966796, 4294967396])  # Monotonic after unwrapping
         >>> wraps
         array([2])  # Wrap detected at index 2
     """
     if len(values) == 0:
-        return np.array([]), None, None
+        return np.array([]), None, None, initial_offset, prev_raw_value
 
     if wrap_threshold is None:
         wrap_threshold = 0.75 * max_value
@@ -199,9 +205,17 @@ def unwrap_array(
 
     # Step 1: Detect wraps and unwrap
     unwrapped = np.zeros_like(values, dtype=np.int64)
-    unwrapped[0] = values[0]
-    offset = 0
+    offset = initial_offset
     wrap_indices_list = []
+
+    # Check for wrap at segment boundary (first value vs previous segment's last value)
+    if prev_raw_value is not None:
+        diff = values[0] - prev_raw_value
+        if diff < 0 and abs(diff) > wrap_threshold:
+            offset += max_value
+            wrap_indices_list.append(0)
+    
+    unwrapped[0] = values[0] + offset
 
     for i in range(1, len(values)):
         current = values[i]
@@ -237,8 +251,11 @@ def unwrap_array(
         if jump_indices_list
         else None
     )
+    
+    # Return last raw value for next segment
+    last_raw_value = int(values[-1]) if len(values) > 0 else None
 
-    return unwrapped, wrap_indices, jump_indices
+    return unwrapped, wrap_indices, jump_indices, offset, last_raw_value
 
 
 def compute_pps_regression(
@@ -1099,8 +1116,11 @@ def parse_binary_content(
     gps_marker: bytes,
     imu_marker: bytes,
     footer_marker: bytes,
-) -> tuple[list, list, list]:
-    """Parse binary content and extract all PPS, GNSS, and IMU entries.
+) -> list[dict[str, list]]:
+    """Parse binary content and extract all PPS, GNSS, and IMU entries in segments.
+    
+    Segments are created based on IMU count: once n_imus_per_segment is reached,
+    a new segment starts. All data types switch to the new segment based on file order.
     
     Args:
         content: Full file content as bytes
@@ -1108,25 +1128,43 @@ def parse_binary_content(
         pps_marker, gps_marker, imu_marker, footer_marker: Entry markers
         
     Returns:
-        Tuple of (pps_list, gnss_list, imu_list)
+        List of segment dicts, each containing {'pps_list': [], 'gnss_list': [], 'imu_list': []}
     """
     acc_sensitivity = header_info.get("acc_sensitivity", 0.061)
     gyr_sensitivity = header_info.get("gyr_sensitivity", 4.375)
+    imu_odr = header_info.get("imu_odr", 6667.0)
+    
+    # Calculate segment size: 1 minute of IMU samples
+    n_imus_per_segment = round(imu_odr * 60)
+    logger.info(f"Segment size: {n_imus_per_segment} IMU samples (≈1 minute at {imu_odr} Hz)")
     
     pps_struct_size = PPS_STRUCT_SIZE
     gps_struct_size = GPS_STRUCT_SIZE
     imu_struct_size = IMU_STRUCT_SIZE
     
-    pps_list = []
-    gnss_list = []
-    imu_list = []
+    # Initialize first segment
+    segments = []
+    current_segment = {'pps_list': [], 'gnss_list': [], 'imu_list': []}
+    segments.append(current_segment)
+    segment_imu_count = 0
     
-    start_offset = 0  # Track bytes parsed
+    start_offset = 0
     idx = 0
     while idx < len(content):
+        # Check if we need to start a new segment
+        if segment_imu_count >= n_imus_per_segment:
+            logger.info(
+                f"Starting segment {len(segments)} at byte {idx} "
+                f"(segment {len(segments)-1} had {segment_imu_count} IMUs, "
+                f"{len(current_segment['pps_list'])} PPS, {len(current_segment['gnss_list'])} GNSS)"
+            )
+            current_segment = {'pps_list': [], 'gnss_list': [], 'imu_list': []}
+            segments.append(current_segment)
+            segment_imu_count = 0
+        
         if content[idx : idx + 4] == pps_marker:
             idx, should_break = process_pps_entry(
-                content, idx, pps_list, gnss_list, imu_list,
+                content, idx, current_segment['pps_list'], current_segment['gnss_list'], current_segment['imu_list'],
                 pps_marker, gps_marker, imu_marker, footer_marker,
                 pps_struct_size
             )
@@ -1135,7 +1173,7 @@ def parse_binary_content(
                 
         elif content[idx : idx + 4] == gps_marker:
             idx, should_break = process_gnss_entry(
-                content, idx, pps_list, gnss_list, imu_list,
+                content, idx, current_segment['pps_list'], current_segment['gnss_list'], current_segment['imu_list'],
                 pps_marker, gps_marker, imu_marker, footer_marker,
                 gps_struct_size
             )
@@ -1144,12 +1182,15 @@ def parse_binary_content(
                 
         elif content[idx : idx + 4] == imu_marker:
             idx, should_break = process_imu_entry(
-                content, idx, pps_list, gnss_list, imu_list,
+                content, idx, current_segment['pps_list'], current_segment['gnss_list'], current_segment['imu_list'],
                 pps_marker, gps_marker, imu_marker, footer_marker,
                 imu_struct_size, acc_sensitivity, gyr_sensitivity
             )
             if should_break:
                 break
+            # Increment IMU count after successful processing
+            if not should_break:
+                segment_imu_count += 1
                 
         elif footer_marker in content[idx : idx + len(footer_marker) + 10]:
             logger.info("Found footer marker, stopping parsing")
@@ -1160,11 +1201,16 @@ def parse_binary_content(
     # Check if file ended properly
     footer_found = footer_marker in content[max(0, idx - 100) : idx + 100]
     
+    # Calculate totals across all segments
+    total_pps = sum(len(seg['pps_list']) for seg in segments)
+    total_gnss = sum(len(seg['gnss_list']) for seg in segments)
+    total_imu = sum(len(seg['imu_list']) for seg in segments)
+    
     if not footer_found and idx >= len(content):
         logger.warning(f"Missing footer at end of file (byte {len(content)})")
         logger.error(
-            f"File incomplete. Parsed {len(pps_list)} PPS, "
-            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries before EOF"
+            f"File incomplete. Parsed {total_pps} PPS, "
+            f"{total_gnss} GNSS, {total_imu} IMU entries before EOF"
         )
     elif not footer_found and idx < len(content):
         remaining_bytes = len(content) - idx
@@ -1173,37 +1219,36 @@ def parse_binary_content(
             f"{remaining_bytes / len(content) * 100:.1f}% of file unprocessed)"
         )
         logger.error(
-            f"Unrecoverable corruption. Parsed {len(pps_list)} PPS, "
-            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU before corruption"
+            f"Unrecoverable corruption. Parsed {total_pps} PPS, "
+            f"{total_gnss} GNSS, {total_imu} IMU before corruption"
         )
     
     # Log final parse statistics
     bytes_parsed = idx - start_offset
-    total_entries = len(pps_list) + len(gnss_list) + len(imu_list)
+    total_entries = total_pps + total_gnss + total_imu
     
-    logger.info(f"Parsed {len(pps_list)} PPS, {len(gnss_list)} GNSS, {len(imu_list)} IMU entries")
+    logger.info(f"Created {len(segments)} segments")
+    logger.info(f"Total: {total_pps} PPS, {total_gnss} GNSS, {total_imu} IMU entries")
     logger.info(f"Processed {bytes_parsed:,} bytes ({bytes_parsed / len(content) * 100:.1f}% of file)")
     if total_entries > 0:
         logger.info(f"Average {bytes_parsed / total_entries:.1f} bytes per entry")
     
-    return pps_list, gnss_list, imu_list
+    return segments
 
 
 
 def save_decoded_data(
-    pps_list: list,
-    gnss_list: list,
-    imu_list: list,
+    segments: list[dict[str, list]],
     output_dir: Path,
     base_name: str,
     header_info: dict[str, Any],
     header_text: str,
     unwrap_stats: dict | None = None,
 ) -> dict[str, Path]:
-    """Save decoded data to compressed numpy archive.
+    """Save decoded data to compressed numpy archive with segment naming.
     
     Args:
-        pps_list, gnss_list, imu_list: Parsed data lists
+        segments: List of segment dicts, each with pps_list, gnss_list, imu_list
         output_dir: Directory to save files
         base_name: Base name for output file
         header_info: Dictionary of parsed header values
@@ -1217,23 +1262,15 @@ def save_decoded_data(
     """
     output_files = {}
     
-    # Convert to arrays
-    pps_array = np.array(pps_list, dtype=object)
-    gnss_array = np.array(gnss_list, dtype=object)
-    imu_array = np.array(imu_list, dtype=object)
-    
     # Prepare header data for storage
     header_string_array = np.array([header_text], dtype=object)
     
-    # Create individual arrays for each header value
     save_dict = {
-        "pps": pps_array,
-        "gnss": gnss_array,
-        "imu": imu_array,
         "header_string": header_string_array,
+        "number_of_segments": np.array([len(segments)]),
     }
     
-    # Add individual header fields as separate arrays
+    # Add individual header fields as separate arrays (without segment suffix)
     if "acc_sensitivity" in header_info:
         save_dict["acc_sensitivity"] = np.array([header_info["acc_sensitivity"]])
     if "gyr_sensitivity" in header_info:
@@ -1245,16 +1282,84 @@ def save_decoded_data(
     if "firmware_commit" in header_info:
         save_dict["firmware_commit"] = np.array([header_info["firmware_commit"]], dtype=object)
     
+    # Save each segment with _segmentXXX naming
+    for seg_idx, segment in enumerate(segments):
+        seg_suffix = f"_segment{seg_idx:03d}"
+        
+        # Convert segment lists to arrays
+        pps_array = np.array(segment['pps_list'], dtype=object)
+        gnss_array = np.array(segment['gnss_list'], dtype=object)
+        imu_array = np.array(segment['imu_list'], dtype=object)
+        
+        save_dict[f"pps{seg_suffix}"] = pps_array
+        save_dict[f"gnss{seg_suffix}"] = gnss_array
+        save_dict[f"imu{seg_suffix}"] = imu_array
+    
     # Save as single compressed file
     npz_file = output_dir / f"{base_name}.npz"
     np.savez_compressed(npz_file, **save_dict)
     output_files["file"] = npz_file
-    logger.info(f"Saved decoded data to {npz_file} (compressed)")
+    logger.info(f"Saved {len(segments)} segments to {npz_file} (compressed)")
     
     if unwrap_stats is not None:
         output_files["unwrap_stats"] = unwrap_stats
     
     return output_files
+
+
+def load_and_combine_segments(npz_file: Path) -> dict[str, Any]:
+    """Load segmented NPZ file and combine segments into single arrays.
+    
+    Args:
+        npz_file: Path to the segmented .npz file
+        
+    Returns:
+        Dictionary with combined arrays and header info:
+        - 'pps': Combined PPS array
+        - 'gnss': Combined GNSS array
+        - 'imu': Combined IMU array
+        - 'header_string': Header text
+        - 'acc_sensitivity', 'gyr_sensitivity', etc.: Header fields
+        - 'number_of_segments': Number of segments in original file
+    """
+    logger.info(f"Loading segmented data from {npz_file}")
+    
+    data = np.load(npz_file, allow_pickle=True)
+    result = {}
+    
+    # Load number of segments
+    number_of_segments = int(data['number_of_segments'][0])
+    result['number_of_segments'] = number_of_segments
+    logger.info(f"File contains {number_of_segments} segments")
+    
+    # Combine segments
+    pps_segments = []
+    gnss_segments = []
+    imu_segments = []
+    
+    for seg_idx in range(number_of_segments):
+        seg_suffix = f"_segment{seg_idx:03d}"
+        pps_segments.append(data[f"pps{seg_suffix}"])
+        gnss_segments.append(data[f"gnss{seg_suffix}"])
+        imu_segments.append(data[f"imu{seg_suffix}"])
+    
+    # Concatenate all segments
+    result['pps'] = np.concatenate(pps_segments) if pps_segments else np.array([])
+    result['gnss'] = np.concatenate(gnss_segments) if gnss_segments else np.array([])
+    result['imu'] = np.concatenate(imu_segments) if imu_segments else np.array([])
+    
+    logger.info(
+        f"Combined: {len(result['pps'])} PPS, "
+        f"{len(result['gnss'])} GNSS, {len(result['imu'])} IMU entries"
+    )
+    
+    # Copy header info (non-segment data)
+    for key in data.keys():
+        if not key.startswith('pps') and not key.startswith('gnss') and not key.startswith('imu'):
+            if key != 'number_of_segments':
+                result[key] = data[key]
+    
+    return result
 
 
 def decode_file(
@@ -1269,15 +1374,16 @@ def decode_file(
     gps_struct_size: int = GPS_STRUCT_SIZE,
     imu_struct_size: int = IMU_STRUCT_SIZE,
 ) -> dict[str, Path]:
-    """Decode a single data file and save to compressed numpy archive.
+    """Decode a single data file and save to compressed numpy archive with segments.
 
     This function performs the complete decoding pipeline:
     1. Parses file header to extract sensor sensitivities
-    2. Scans binary file for PPS, GNSS, and IMU entries
-    3. Computes linear regression from PPS+GNSS to get UTC timestamps
-    4. Applies regression to all entries for synchronized timestamps
-    5. Unwraps potentially wrapping counters and detects anomalies
-    6. Saves decoded data to compressed .npz file
+    2. Scans binary file for PPS, GNSS, and IMU entries in 1-minute segments
+    3. For each segment independently:
+       - Unwraps potentially wrapping counters and detects anomalies
+       - Computes linear regression from PPS+GNSS to get UTC timestamps
+       - Applies regression to all entries for synchronized timestamps
+    4. Saves decoded data to compressed .npz file with segment naming
 
     Args:
         input_file: Path to input data file
@@ -1291,7 +1397,7 @@ def decode_file(
     Returns:
         Dictionary with keys:
         - "file": Path to compressed .npz file
-        - "unwrap_stats": Unwrap statistics with wrap/jump counts
+        - "unwrap_stats": Unwrap statistics with wrap/jump counts per segment
 
     Raises:
         AssertionError: If binary data structure doesn't match expected format
@@ -1308,105 +1414,145 @@ def decode_file(
     with open(input_file, "rb") as f:
         content = f.read()
 
-    # Parse binary content
-    pps_list, gnss_list, imu_list = parse_binary_content(
+    # Parse binary content into segments
+    segments = parse_binary_content(
         content, header_info, pps_marker, gps_marker, imu_marker, footer_marker
     )
 
-    # Find global minimum micros reading for reference
-    all_micros = (
-        [p.micros_reading for p in pps_list] +
-        [g.micros_reading for g in gnss_list] +
-        [i.micros_reading for i in imu_list]
+    # Process each segment independently with unwrap offset carryover
+    all_unwrap_stats = {}
+    
+    # Initialize unwrap offsets and last raw values (carry over between segments)
+    pps_micros_offset = 0
+    pps_micros_prev_raw = None
+    gnss_micros_offset = 0
+    gnss_micros_prev_raw = None
+    imu_micros_offset = 0
+    imu_micros_prev_raw = None
+    imu_counter_offset = 0
+    imu_counter_prev_raw = None
+    
+    for seg_idx, segment in enumerate(segments):
+        logger.info(f"Processing segment {seg_idx}...")
+        
+        pps_list = segment['pps_list']
+        gnss_list = segment['gnss_list']
+        imu_list = segment['imu_list']
+        
+        # Skip empty segments
+        if not pps_list and not gnss_list and not imu_list:
+            logger.warning(f"Segment {seg_idx} is empty, skipping")
+            continue
+        
+        # Find minimum micros reading for this segment
+        all_micros = (
+            [p.micros_reading for p in pps_list] +
+            [g.micros_reading for g in gnss_list] +
+            [i.micros_reading for i in imu_list]
+        )
+        segment_min_micros = min(all_micros) if all_micros else 0
+        
+        # Unwrap potentially wrapping arrays and detect jumps (per segment with offset carryover)
+        segment_unwrap_stats = {}
+
+        # Process PPS micros_reading
+        if pps_list:
+            pps_micros = np.array([p.micros_reading for p in pps_list])
+            pps_micros_unwrapped, pps_micros_wraps, pps_micros_jumps, pps_micros_offset, pps_micros_prev_raw = unwrap_array(
+                pps_micros, max_value=2**32, initial_offset=pps_micros_offset, prev_raw_value=pps_micros_prev_raw
+            )
+            for i, pps in enumerate(pps_list):
+                pps.micros_reading_unwrapped = int(pps_micros_unwrapped[i])
+
+            segment_unwrap_stats["PPS"] = {
+                "micros_reading": {
+                    "wraps": 0 if pps_micros_wraps is None else len(pps_micros_wraps),
+                    "jumps": 0 if pps_micros_jumps is None else len(pps_micros_jumps),
+                    "wrap_indices": pps_micros_wraps,
+                    "jump_indices": pps_micros_jumps,
+                }
+            }
+
+        # Process GNSS micros_reading
+        if gnss_list:
+            gnss_micros = np.array([g.micros_reading for g in gnss_list])
+            gnss_micros_unwrapped, gnss_micros_wraps, gnss_micros_jumps, gnss_micros_offset, gnss_micros_prev_raw = unwrap_array(
+                gnss_micros, max_value=2**32, initial_offset=gnss_micros_offset, prev_raw_value=gnss_micros_prev_raw
+            )
+            for i, gnss in enumerate(gnss_list):
+                gnss.micros_reading_unwrapped = int(gnss_micros_unwrapped[i])
+
+            segment_unwrap_stats["GNSS"] = {
+                "micros_reading": {
+                    "wraps": 0 if gnss_micros_wraps is None else len(gnss_micros_wraps),
+                    "jumps": 0 if gnss_micros_jumps is None else len(gnss_micros_jumps),
+                    "wrap_indices": gnss_micros_wraps,
+                    "jump_indices": gnss_micros_jumps,
+                }
+            }
+
+        # Process IMU micros_reading and counter
+        if imu_list:
+            imu_micros = np.array([i.micros_reading for i in imu_list])
+            imu_micros_unwrapped, imu_micros_wraps, imu_micros_jumps, imu_micros_offset, imu_micros_prev_raw = unwrap_array(
+                imu_micros, max_value=2**32, initial_offset=imu_micros_offset, prev_raw_value=imu_micros_prev_raw
+            )
+
+            imu_counter = np.array([i.counter for i in imu_list])
+            imu_counter_unwrapped, imu_counter_wraps, imu_counter_jumps, imu_counter_offset, imu_counter_prev_raw = unwrap_array(
+                imu_counter, max_value=2**16, jump_threshold=1, initial_offset=imu_counter_offset, prev_raw_value=imu_counter_prev_raw
+            )
+
+            for i, imu in enumerate(imu_list):
+                imu.micros_reading_unwrapped = int(imu_micros_unwrapped[i])
+                imu.counter_unwrapped = int(imu_counter_unwrapped[i])
+
+            segment_unwrap_stats["IMU"] = {
+                "micros_reading": {
+                    "wraps": 0 if imu_micros_wraps is None else len(imu_micros_wraps),
+                    "jumps": 0 if imu_micros_jumps is None else len(imu_micros_jumps),
+                    "wrap_indices": imu_micros_wraps,
+                    "jump_indices": imu_micros_jumps,
+                },
+                "counter": {
+                    "wraps": 0 if imu_counter_wraps is None else len(imu_counter_wraps),
+                    "jumps": 0 if imu_counter_jumps is None else len(imu_counter_jumps),
+                    "wrap_indices": imu_counter_wraps,
+                    "jump_indices": imu_counter_jumps,
+                },
+            }
+        
+        # Store unwrap stats for this segment
+        all_unwrap_stats[f"segment_{seg_idx:03d}"] = segment_unwrap_stats
+
+        # Compute PPS regression for this segment
+        logger.info(f"Computing PPS to UTC timestamp regression for segment {seg_idx}...")
+        regression = compute_pps_regression(pps_list, gnss_list, segment_min_micros)
+        if regression is None:
+            logger.warning(f"Skipping PPS regression for segment {seg_idx} due to insufficient data")
+        else:
+            slope, intercept = regression
+            apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
+            if pps_list:
+                compute_pps_mismatch_statistics(pps_list)
+
+        # Print summary statistics for this segment
+        logger.info(
+            f"Segment {seg_idx}: {len(pps_list)} PPS, "
+            f"{len(gnss_list)} GNSS, {len(imu_list)} IMU entries"
+        )
+
+    # Print overall summary statistics
+    total_pps = sum(len(seg['pps_list']) for seg in segments)
+    total_gnss = sum(len(seg['gnss_list']) for seg in segments)
+    total_imu = sum(len(seg['imu_list']) for seg in segments)
+    logger.info(
+        f"Total across all segments: {total_pps} PPS, "
+        f"{total_gnss} GNSS, {total_imu} IMU entries"
     )
-    global_min_micros = min(all_micros) if all_micros else 0
-    logger.info(f"Global minimum micros reading: {global_min_micros}")
-
-    # Compute PPS regression
-    logger.info("Computing PPS to UTC timestamp regression...")
-    regression = compute_pps_regression(pps_list, gnss_list, global_min_micros)
-    if regression is None:
-        logger.warning("Skipping PPS regression due to insufficient data")
-    else:
-        slope, intercept = regression
-        apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
-        compute_pps_mismatch_statistics(pps_list)
-
-    # Unwrap potentially wrapping arrays and detect jumps
-    unwrap_stats = {}
-
-    # Process PPS micros_reading
-    if pps_list:
-        pps_micros = np.array([p.micros_reading for p in pps_list])
-        pps_micros_unwrapped, pps_micros_wraps, pps_micros_jumps = unwrap_array(
-            pps_micros, max_value=2**32
-        )
-        for i, pps in enumerate(pps_list):
-            pps.micros_reading_unwrapped = int(pps_micros_unwrapped[i])
-
-        unwrap_stats["PPS"] = {
-            "micros_reading": {
-                "wraps": 0 if pps_micros_wraps is None else len(pps_micros_wraps),
-                "jumps": 0 if pps_micros_jumps is None else len(pps_micros_jumps),
-                "wrap_indices": pps_micros_wraps,
-                "jump_indices": pps_micros_jumps,
-            }
-        }
-
-    # Process GNSS micros_reading
-    if gnss_list:
-        gnss_micros = np.array([g.micros_reading for g in gnss_list])
-        gnss_micros_unwrapped, gnss_micros_wraps, gnss_micros_jumps = unwrap_array(
-            gnss_micros, max_value=2**32
-        )
-        for i, gnss in enumerate(gnss_list):
-            gnss.micros_reading_unwrapped = int(gnss_micros_unwrapped[i])
-
-        unwrap_stats["GNSS"] = {
-            "micros_reading": {
-                "wraps": 0 if gnss_micros_wraps is None else len(gnss_micros_wraps),
-                "jumps": 0 if gnss_micros_jumps is None else len(gnss_micros_jumps),
-                "wrap_indices": gnss_micros_wraps,
-                "jump_indices": gnss_micros_jumps,
-            }
-        }
-
-    # Process IMU micros_reading and counter
-    if imu_list:
-        imu_micros = np.array([i.micros_reading for i in imu_list])
-        imu_micros_unwrapped, imu_micros_wraps, imu_micros_jumps = unwrap_array(
-            imu_micros, max_value=2**32
-        )
-
-        imu_counter = np.array([i.counter for i in imu_list])
-        imu_counter_unwrapped, imu_counter_wraps, imu_counter_jumps = unwrap_array(
-            imu_counter, max_value=2**16, jump_threshold=1
-        )
-
-        for i, imu in enumerate(imu_list):
-            imu.micros_reading_unwrapped = int(imu_micros_unwrapped[i])
-            imu.counter_unwrapped = int(imu_counter_unwrapped[i])
-
-        unwrap_stats["IMU"] = {
-            "micros_reading": {
-                "wraps": 0 if imu_micros_wraps is None else len(imu_micros_wraps),
-                "jumps": 0 if imu_micros_jumps is None else len(imu_micros_jumps),
-                "wrap_indices": imu_micros_wraps,
-                "jump_indices": imu_micros_jumps,
-            },
-            "counter": {
-                "wraps": 0 if imu_counter_wraps is None else len(imu_counter_wraps),
-                "jumps": 0 if imu_counter_jumps is None else len(imu_counter_jumps),
-                "wrap_indices": imu_counter_wraps,
-                "jump_indices": imu_counter_jumps,
-            },
-        }
-
-    # Print summary statistics
-    print_summary_statistics(pps_list, gnss_list, imu_list, unwrap_stats=unwrap_stats)
 
     # Save results and return file paths with unwrap stats
     return save_decoded_data(
-        pps_list, gnss_list, imu_list, output_dir, input_file.stem,
-        header_info, header_text, unwrap_stats
+        segments, output_dir, input_file.stem,
+        header_info, header_text, all_unwrap_stats
     )

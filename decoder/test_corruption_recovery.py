@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from decoder import decode_file
+from decoder import decode_file, load_and_combine_segments
 
 
 def test_corruption_recovery_with_gap(tmp_path):
@@ -47,8 +47,8 @@ GNSS update rate (Hz): 10
     # Decode should succeed and recover
     output_files = decode_file(test_file, output_dir=tmp_path)
 
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        imu_data = data["imu"]
+    combined = load_and_combine_segments(output_files["file"])
+    imu_data = combined["imu"]
 
     # Should have recovered all 4 IMU entries
     assert len(imu_data) == 4, f"Expected 4 IMU entries, got {len(imu_data)}"
@@ -87,8 +87,8 @@ GNSS update rate (Hz): 10
     # Decode should succeed with what it has
     output_files = decode_file(test_file, output_dir=tmp_path)
 
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        imu_data = data["imu"]
+    combined = load_and_combine_segments(output_files["file"])
+    imu_data = combined["imu"]
 
     # Should have only 2 complete entries
     assert len(imu_data) == 2, f"Expected 2 IMU entries, got {len(imu_data)}"
@@ -123,8 +123,8 @@ GNSS update rate (Hz): 10
     # Decode should succeed with what it has before corruption
     output_files = decode_file(test_file, output_dir=tmp_path)
 
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        imu_data = data["imu"]
+    combined = load_and_combine_segments(output_files["file"])
+    imu_data = combined["imu"]
 
     # Should have only 1 entry (before corruption)
     assert len(imu_data) == 1
@@ -172,10 +172,10 @@ GNSS update rate (Hz): 10
 
     output_files = decode_file(test_file, output_dir=tmp_path)
 
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        pps_data = data["pps"]
-        gnss_data = data["gnss"]
-        imu_data = data["imu"]
+    combined = load_and_combine_segments(output_files["file"])
+    pps_data = combined["pps"]
+    gnss_data = combined["gnss"]
+    imu_data = combined["imu"]
 
     # Should have recovered all entries
     assert len(pps_data) == 2
@@ -205,10 +205,10 @@ def test_real_world_aborted_file():
     output_files = decode_file(test_file)
     
     # Should have extracted some data (file isn't completely corrupt)
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        pps_data = data["pps"]
-        gnss_data = data["gnss"]
-        imu_data = data["imu"]
+    combined = load_and_combine_segments(output_files["file"])
+    pps_data = combined["pps"]
+    gnss_data = combined["gnss"]
+    imu_data = combined["imu"]
     
     # Basic sanity checks - we should have gotten some data
     total_entries = len(pps_data) + len(gnss_data) + len(imu_data)

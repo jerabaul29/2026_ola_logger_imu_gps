@@ -12,6 +12,7 @@ from decoder import (
     PPSFix,
     compute_pps_regression,
     decode_file,
+    load_and_combine_segments,
     parse_gnss_entry,
     parse_header,
     parse_imu_entry,
@@ -111,11 +112,11 @@ def test_decode_file_with_real_data():
     assert "file" in output_files
     assert "unwrap_stats" in output_files
 
-    # Load from compressed archive
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        pps_data = data["pps"]
-        gnss_data = data["gnss"]
-        imu_data = data["imu"]
+    # Load from compressed archive using helper function
+    combined_data = load_and_combine_segments(output_files["file"])
+    pps_data = combined_data["pps"]
+    gnss_data = combined_data["gnss"]
+    imu_data = combined_data["imu"]
 
     assert len(pps_data) > 0
     assert len(gnss_data) > 0
@@ -185,11 +186,11 @@ GNSS update rate (Hz): 10
     assert "file" in output_files
     assert "unwrap_stats" in output_files
 
-    # Load from compressed archive
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        pps_data = data["pps"]
-        gnss_data = data["gnss"]
-        imu_data = data["imu"]
+    # Load from compressed archive using helper function
+    combined_data = load_and_combine_segments(output_files["file"])
+    pps_data = combined_data["pps"]
+    gnss_data = combined_data["gnss"]
+    imu_data = combined_data["imu"]
 
     assert len(pps_data) == 1
     assert len(gnss_data) == 1
@@ -312,8 +313,8 @@ GNSS update rate (Hz): 10
     
     # Decode the file
     output_files = decode_file(test_file, output_dir=tmp_path)
-    with np.load(output_files["file"], allow_pickle=True) as data:
-        imu_data = data["imu"]
+    combined_data = load_and_combine_segments(output_files["file"])
+    imu_data = combined_data["imu"]
     
     # Should have parsed all 5 entries
     assert len(imu_data) == 5
@@ -333,11 +334,13 @@ GNSS update rate (Hz): 10
 def test_unwrap_array_no_wrapping():
     """Test unwrap_array with no wrapping or jumps."""
     values = np.array([1000, 2000, 3000, 4000])
-    unwrapped, wraps, jumps = unwrap_array(values, max_value=2**32)
+    unwrapped, wraps, jumps, final_offset, last_raw = unwrap_array(values, max_value=2**32)
     
     assert np.array_equal(unwrapped, values)
     assert wraps is None
     assert jumps is None
+    assert final_offset == 0
+    assert last_raw == 4000
 
 
 def test_unwrap_array_with_wrapping():
@@ -345,7 +348,7 @@ def test_unwrap_array_with_wrapping():
     UINT32_MAX = 2**32
     # Simulate wrap: values go from near max to near zero
     values = np.array([UINT32_MAX - 1000, UINT32_MAX - 500, 100, 500])
-    unwrapped, wraps, jumps = unwrap_array(values, max_value=UINT32_MAX)
+    unwrapped, wraps, jumps, final_offset, last_raw = unwrap_array(values, max_value=UINT32_MAX)
     
     # After unwrapping, values should be monotonic
     assert unwrapped[0] == UINT32_MAX - 1000
@@ -360,12 +363,16 @@ def test_unwrap_array_with_wrapping():
     
     # No jumps (monotonic after unwrapping)
     assert jumps is None
+    
+    # Final offset should be UINT32_MAX
+    assert final_offset == UINT32_MAX
+    assert last_raw == 500
 
 
 def test_unwrap_array_with_negative_jump():
     """Test unwrap_array detecting negative jumps (backwards in time)."""
     values = np.array([1000, 2000, 3000, 2500, 4000])  # value[3] goes backwards
-    unwrapped, wraps, jumps = unwrap_array(values, max_value=2**32)
+    unwrapped, wraps, jumps, final_offset, last_raw = unwrap_array(values, max_value=2**32)
     
     # No wraps (no large backwards jumps)
     assert wraps is None
@@ -381,7 +388,7 @@ def test_unwrap_array_with_large_forward_jump():
     jump_threshold = 0.1 * UINT32_MAX
     
     values = np.array([1000, 2000, 3000, 3000 + jump_threshold + 1000])
-    unwrapped, wraps, jumps = unwrap_array(values, max_value=UINT32_MAX)
+    unwrapped, wraps, jumps, final_offset, last_raw = unwrap_array(values, max_value=UINT32_MAX)
     
     # No wraps
     assert wraps is None
@@ -397,7 +404,7 @@ def test_unwrap_array_counter():
 
     # Counter wraps at 65536 and has one missed sample (jump by 2 instead of 1)
     values = np.array([65534, 65535, 0, 1, 3, 4])  # Jump at index 4 (1->3, diff=2 > threshold 1)
-    unwrapped, wraps, jumps = unwrap_array(
+    unwrapped, wraps, jumps, final_offset, last_raw = unwrap_array(
         values, max_value=UINT16_MAX, jump_threshold=1
     )
 
@@ -409,13 +416,88 @@ def test_unwrap_array_counter():
     # Should detect jump at index 4 (diff=2, exceeds threshold of 1)
     assert jumps is not None
     assert 4 in jumps
+    
+    # Final offset should be UINT16_MAX
+    assert final_offset == UINT16_MAX
+    assert last_raw == 4
 
 
 def test_unwrap_array_empty():
     """Test unwrap_array with empty array."""
     values = np.array([])
-    unwrapped, wraps, jumps = unwrap_array(values, max_value=2**32)
+    unwrapped, wraps, jumps, final_offset, last_raw = unwrap_array(values, max_value=2**32)
     
     assert len(unwrapped) == 0
     assert wraps is None
     assert jumps is None
+    assert final_offset == 0
+    assert last_raw is None
+
+
+def test_unwrap_offset_carryover():
+    """Test that unwrap offsets carry over correctly between segments."""
+    # Simulate two segments where second segment continues from first
+    
+    # Segment 1: ends near a wrap boundary (use 900 to be close to 1000)
+    seg1_values = np.array([700, 800, 900])
+    seg1_unwrapped, _, _, seg1_final_offset, seg1_last_raw = unwrap_array(seg1_values, max_value=1000)
+    
+    assert seg1_unwrapped[0] == 700
+    assert seg1_unwrapped[2] == 900
+    assert seg1_final_offset == 0  # No wraps yet
+    assert seg1_last_raw == 900
+    
+    # Segment 2: wraps to low values (900 -> 10 is diff of -890, exceeds threshold of -750)
+    seg2_values = np.array([10, 100, 200])
+    seg2_unwrapped, wraps, _, seg2_final_offset, seg2_last_raw = unwrap_array(
+        seg2_values, max_value=1000, initial_offset=seg1_final_offset, prev_raw_value=seg1_last_raw
+    )
+    
+    # With proper detection, should be [1010, 1100, 1200]
+    assert seg2_unwrapped[0] == 1010, f"Expected 1010, got {seg2_unwrapped[0]}"
+    assert seg2_unwrapped[2] == 1200, f"Expected 1200, got {seg2_unwrapped[2]}"
+    assert wraps is not None, "Should detect wrap"
+    assert len(wraps) == 1, "Should detect one wrap"
+    assert wraps[0] == 0, "Wrap should be at first element (segment boundary)"
+    assert seg2_final_offset == 1000, f"Expected offset 1000, got {seg2_final_offset}"
+    assert seg2_last_raw == 200
+    
+    # Segment 3: continues with carried offset, no wrap within segment
+    seg3_values = np.array([250, 300, 350])
+    seg3_unwrapped, _, _, seg3_final_offset, _ = unwrap_array(
+        seg3_values, max_value=1000, initial_offset=seg2_final_offset, prev_raw_value=seg2_last_raw
+    )
+    
+    assert seg3_unwrapped[0] == 1250, f"Expected 1250, got {seg3_unwrapped[0]}"
+    assert seg3_unwrapped[2] == 1350, f"Expected 1350, got {seg3_unwrapped[2]}"
+
+
+def test_unwrap_counter_carryover():
+    """Test that IMU counter unwrap offsets carry over between segments."""
+    UINT16_MAX = 2**16
+    
+    # Segment 1: counter goes from 65530 to 65535
+    seg1_values = np.array([65530, 65531, 65532, 65533, 65534, 65535])
+    seg1_unwrapped, _, _, seg1_offset, seg1_last_raw = unwrap_array(seg1_values, max_value=UINT16_MAX, jump_threshold=1)
+    
+    assert seg1_unwrapped[-1] == 65535
+    assert seg1_offset == 0  # No wrap yet
+    assert seg1_last_raw == 65535
+    
+    # Segment 2: counter wraps to 0, 1, 2, ...
+    seg2_values = np.array([0, 1, 2, 3, 4, 5])
+    seg2_unwrapped, wraps, _, seg2_offset, _ = unwrap_array(
+        seg2_values, max_value=UINT16_MAX, jump_threshold=1, initial_offset=seg1_offset, prev_raw_value=seg1_last_raw
+    )
+    
+    # Should detect wrap and continue monotonically
+    assert wraps is not None
+    assert len(wraps) == 1
+    assert wraps[0] == 0  # Wrap at first element (segment boundary)
+    assert seg2_unwrapped[0] == 65536, f"Expected 65536, got {seg2_unwrapped[0]}"
+    assert seg2_unwrapped[-1] == 65541, f"Expected 65541, got {seg2_unwrapped[-1]}"
+    assert seg2_offset == UINT16_MAX
+    
+    # Verify monotonic increase from seg1 to seg2
+    assert seg2_unwrapped[0] > seg1_unwrapped[-1]
+    assert seg2_unwrapped[0] - seg1_unwrapped[-1] == 1  # Should increment by 1
