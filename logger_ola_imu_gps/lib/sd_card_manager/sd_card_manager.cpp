@@ -80,7 +80,7 @@ bool SD_Card_Manager::start() {
     
     SERIAL_USB->println(F("Initializing SD card..."));
     
-    SdSpiConfig sd_config{SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(50)};
+    SdSpiConfig sd_config{SD_CS_PIN, DEDICATED_SPI, SD_SCK_MHZ(SD_SPI_MHZ)};
     
     if (!sd_card.begin(sd_config)) {
         SERIAL_USB->println(F("ERROR: SD card initialization failed!"));

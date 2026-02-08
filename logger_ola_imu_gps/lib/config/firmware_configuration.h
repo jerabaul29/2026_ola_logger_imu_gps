@@ -40,7 +40,7 @@ static constexpr int PIN_STAT_LED {19};
 // SD card pins
 
 static constexpr int SD_CS_PIN {23};
-static constexpr int SD_SPI_MHZ {24};
+static constexpr int SD_SPI_MHZ {50};
 static constexpr int SD_PWR {15};
 
 //////////////////////////////////////////////////////////////////////////////////////////
