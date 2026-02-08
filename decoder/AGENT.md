@@ -16,9 +16,56 @@
 - the `./decoder.py` module contains all the utilities to easily decode a single data file at a time
 - the file `./DATA_BOOT_0055_TIME_20260120T211500.dat` contains an example of data file
 - the `./example_decode.py` script contains an example of how to decode the data file using the decoder functions
+- the `./simple_example.py` script is the **recommended starting point** for end users - shows clean, simple workflow
 - the `./test_decoder.py` module contains the tests to run
 - write and keep up to date a README.md file to explain how to install the mamba env, run the code, etc.
 - as you need more packages, make sure these are all registered in the mamba environment config file
+
+## User-Facing API Design
+
+The decoder provides two equivalent workflows for end users:
+
+### Workflow 1: CLI Tool (for quick inspection)
+```bash
+python decoder_cli.py -p DATA_FILE.dat
+```
+- Decodes file and creates .npz
+- Shows 8 comprehensive plots
+- Good for quick data inspection
+
+### Workflow 2: Python API (recommended for analysis)
+```python
+from decoder import decode_file, load_data_as_arrays
+
+# Step 1: Decode
+result = decode_file(Path("data.dat"))
+
+# Step 2: Load as numpy arrays (EASIEST)
+data = load_data_as_arrays(result['file'])
+
+# Step 3: Use the data
+plot(data['imu_utc'], data['imu_acc_x'])
+```
+
+**Key principle:** Both workflows produce **identical .npz files**. The CLI is for quick inspection, the Python API is for custom analysis.
+
+### API Functions for End Users
+
+1. **`decode_file(path)`** - Decode binary .dat file → returns dict with 'file' (npz path)
+2. **`load_data_as_arrays(npz_path)`** - Load .npz → returns dict of numpy arrays (RECOMMENDED)
+3. **`load_and_combine_segments(npz_path)`** - Load .npz → returns dict of dataclass arrays (advanced)
+
+The recommended function is `load_data_as_arrays()` which provides:
+- All sensor data as numpy arrays (ready for matplotlib, scipy, etc.)
+- Clean naming: `imu_acc_x`, `gnss_latitude`, `pps_utc`, etc.
+- Outlier flags: `imu_acc_x_outlier`, `gnss_latitude_outlier`, etc.
+- Header info as scalars: `imu_odr`, `firmware_commit`, etc.
+
+**Design goals:**
+- Simple and obvious for beginners
+- Follows standard numpy/scipy conventions
+- Minimal boilerplate code
+- Works identically whether using CLI or Python API
 
 ## Code practices
 

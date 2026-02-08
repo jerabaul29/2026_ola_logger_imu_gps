@@ -1,4 +1,47 @@
-"""The module for decoding the OLA ISM330DHXC + SAM-M10Q data files."""
+"""Decoder for OLA ISM330DHCX + SAM-M10Q data logger files.
+
+This module provides comprehensive decoding of binary data files from the 
+OLA (OpenLogArtemis) logger with ISM330DHCX IMU and SAM-M10Q GNSS sensors.
+
+**Recommended Usage for End Users:**
+
+    from pathlib import Path
+    from decoder import decode_file, load_data_as_arrays
+    
+    # Step 1: Decode the binary file
+    result = decode_file(Path("DATA_BOOT_0000_TIME_20260204T193000.dat"))
+    
+    # Step 2: Load as numpy arrays (easiest way)
+    data = load_data_as_arrays(result['file'])
+    
+    # Step 3: Use the data
+    print(f"IMU rate: {data['imu_odr']} Hz")
+    print(f"Recording: {len(data['imu_utc'])} IMU samples")
+    
+    # Plot acceleration
+    import matplotlib.pyplot as plt
+    plt.plot(data['imu_utc'], data['imu_acc_x'])
+    plt.xlabel('UTC Time (s)')
+    plt.ylabel('Acceleration (mg)')
+    plt.show()
+
+**Key Functions:**
+
+- `decode_file()`: Main function to decode a .dat file → produces .npz file
+- `load_data_as_arrays()`: Load .npz file as dict of numpy arrays (recommended)
+- `load_and_combine_segments()`: Load .npz file as dict of dataclass arrays (advanced)
+
+**Features:**
+
+- Segment-based processing with automatic quality filtering
+- GPS-synchronized UTC timestamps (microsecond accuracy via PPS regression)
+- Statistical outlier detection for sensor readings
+- Automatic unwrapping of overflow counters
+- Robust corruption recovery
+- Support for both new segmented and legacy file formats
+
+See README.md for complete documentation and examples.
+"""
 
 import struct
 from dataclasses import dataclass
@@ -1614,26 +1657,35 @@ def load_and_combine_segments(npz_file: Path) -> dict[str, Any]:
     data = np.load(npz_file, allow_pickle=True)
     result = {}
     
-    # Load number of segments
-    number_of_segments = int(data['number_of_segments'][0])
-    result['number_of_segments'] = number_of_segments
-    logger.info(f"File contains {number_of_segments} segments")
-    
-    # Combine segments
-    pps_segments = []
-    gnss_segments = []
-    imu_segments = []
-    
-    for seg_idx in range(number_of_segments):
-        seg_suffix = f"_segment{seg_idx:03d}"
-        pps_segments.append(data[f"pps{seg_suffix}"])
-        gnss_segments.append(data[f"gnss{seg_suffix}"])
-        imu_segments.append(data[f"imu{seg_suffix}"])
-    
-    # Concatenate all segments
-    result['pps'] = np.concatenate(pps_segments) if pps_segments else np.array([])
-    result['gnss'] = np.concatenate(gnss_segments) if gnss_segments else np.array([])
-    result['imu'] = np.concatenate(imu_segments) if imu_segments else np.array([])
+    # Check if this is a segmented file (new format) or old format
+    if 'number_of_segments' in data:
+        # New segmented format
+        number_of_segments = int(data['number_of_segments'][0])
+        result['number_of_segments'] = number_of_segments
+        logger.info(f"File contains {number_of_segments} segments")
+        
+        # Combine segments
+        pps_segments = []
+        gnss_segments = []
+        imu_segments = []
+        
+        for seg_idx in range(number_of_segments):
+            seg_suffix = f"_segment{seg_idx:03d}"
+            pps_segments.append(data[f"pps{seg_suffix}"])
+            gnss_segments.append(data[f"gnss{seg_suffix}"])
+            imu_segments.append(data[f"imu{seg_suffix}"])
+        
+        # Concatenate all segments
+        result['pps'] = np.concatenate(pps_segments) if pps_segments else np.array([])
+        result['gnss'] = np.concatenate(gnss_segments) if gnss_segments else np.array([])
+        result['imu'] = np.concatenate(imu_segments) if imu_segments else np.array([])
+    else:
+        # Old non-segmented format
+        logger.info("Legacy format (no segments)")
+        result['number_of_segments'] = 1
+        result['pps'] = data.get('pps', np.array([]))
+        result['gnss'] = data.get('gnss', np.array([]))
+        result['imu'] = data.get('imu', np.array([]))
     
     logger.info(
         f"Combined: {len(result['pps'])} PPS, "
@@ -1645,6 +1697,228 @@ def load_and_combine_segments(npz_file: Path) -> dict[str, Any]:
         if not key.startswith('pps') and not key.startswith('gnss') and not key.startswith('imu'):
             if key != 'number_of_segments':
                 result[key] = data[key]
+    
+    return result
+
+
+def load_data_as_arrays(npz_file: Path) -> dict[str, np.ndarray]:
+    """Load decoded data and extract all fields as individual numpy arrays.
+    
+    This is the recommended way for end users to load decoded data. It provides
+    easy access to all sensor readings and timestamps as numpy arrays, ready for
+    analysis and plotting.
+    
+    Args:
+        npz_file: Path to the decoded .npz file
+        
+    Returns:
+        Dictionary mapping field names to numpy arrays. Keys include:
+        
+        **Header Information:**
+        - 'number_of_segments': Number of data segments (int)
+        - 'firmware_commit': Firmware version string
+        - 'acc_sensitivity': Accelerometer sensitivity (mg/LSB)
+        - 'gyr_sensitivity': Gyroscope sensitivity (mdps/LSB)
+        - 'imu_odr': IMU output data rate (Hz)
+        - 'gnss_rate': GNSS update rate (Hz)
+        - 'header_string': Full header text
+        
+        **PPS Data (N_pps entries):**
+        - 'pps_micros': MCU microsecond timestamps
+        - 'pps_micros_unwrapped': Unwrapped MCU timestamps
+        - 'pps_utc': UTC timestamps from regression (seconds since epoch)
+        
+        **GNSS Data (N_gnss entries):**
+        - 'gnss_micros': MCU microsecond timestamps
+        - 'gnss_micros_unwrapped': Unwrapped MCU timestamps
+        - 'gnss_latitude': Latitude (decimal degrees)
+        - 'gnss_longitude': Longitude (decimal degrees)
+        - 'gnss_vel_north': North velocity (mm/s)
+        - 'gnss_vel_east': East velocity (mm/s)
+        - 'gnss_vel_down': Down velocity (mm/s)
+        - 'gnss_fix_type': GPS fix type (0=none, 2=2D, 3=3D)
+        - 'gnss_posix': GNSS receiver POSIX timestamp
+        - 'gnss_utc': UTC timestamps from regression (seconds since epoch)
+        - 'gnss_latitude_outlier': Outlier flags for latitude
+        - 'gnss_longitude_outlier': Outlier flags for longitude
+        - 'gnss_vel_north_outlier': Outlier flags for north velocity
+        - 'gnss_vel_east_outlier': Outlier flags for east velocity
+        - 'gnss_vel_down_outlier': Outlier flags for down velocity
+        
+        **IMU Data (N_imu entries):**
+        - 'imu_micros': MCU microsecond timestamps
+        - 'imu_micros_unwrapped': Unwrapped MCU timestamps
+        - 'imu_counter': Sample counter (may wrap at 65536)
+        - 'imu_counter_unwrapped': Unwrapped sample counter
+        - 'imu_acc_x': X acceleration (milli-g)
+        - 'imu_acc_y': Y acceleration (milli-g)
+        - 'imu_acc_z': Z acceleration (milli-g)
+        - 'imu_gyr_x': X angular velocity (millidegrees/s)
+        - 'imu_gyr_y': Y angular velocity (millidegrees/s)
+        - 'imu_gyr_z': Z angular velocity (millidegrees/s)
+        - 'imu_utc': UTC timestamps from regression (seconds since epoch)
+        - 'imu_acc_x_outlier': Outlier flags for X acceleration
+        - 'imu_acc_y_outlier': Outlier flags for Y acceleration
+        - 'imu_acc_z_outlier': Outlier flags for Z acceleration
+        - 'imu_gyr_x_outlier': Outlier flags for X gyroscope
+        - 'imu_gyr_y_outlier': Outlier flags for Y gyroscope
+        - 'imu_gyr_z_outlier': Outlier flags for Z gyroscope
+        
+    Example:
+        >>> from pathlib import Path
+        >>> from decoder import decode_file, load_data_as_arrays
+        >>> import matplotlib.pyplot as plt
+        >>> 
+        >>> # Decode the file
+        >>> result = decode_file(Path("DATA_BOOT_0000_TIME_20260204T193000.dat"))
+        >>> 
+        >>> # Load as arrays
+        >>> data = load_data_as_arrays(result['file'])
+        >>> 
+        >>> # Access header info
+        >>> print(f"IMU rate: {data['imu_odr']} Hz")
+        >>> print(f"Firmware: {data['firmware_commit']}")
+        >>> 
+        >>> # Plot acceleration
+        >>> plt.figure(figsize=(12, 6))
+        >>> plt.plot(data['imu_utc'], data['imu_acc_x'], label='X')
+        >>> plt.plot(data['imu_utc'], data['imu_acc_y'], label='Y')
+        >>> plt.plot(data['imu_utc'], data['imu_acc_z'], label='Z')
+        >>> plt.xlabel('UTC Time (s)')
+        >>> plt.ylabel('Acceleration (mg)')
+        >>> plt.legend()
+        >>> plt.show()
+        >>> 
+        >>> # Plot GPS track
+        >>> plt.figure(figsize=(10, 8))
+        >>> plt.plot(data['gnss_longitude'], data['gnss_latitude'])
+        >>> plt.xlabel('Longitude (°)')
+        >>> plt.ylabel('Latitude (°)')
+        >>> plt.title('GPS Track')
+        >>> plt.show()
+    """
+    # First load and combine segments
+    combined = load_and_combine_segments(npz_file)
+    
+    result = {}
+    
+    # Copy header information (scalars)
+    scalar_keys = ['number_of_segments', 'firmware_commit', 'acc_sensitivity', 
+                   'gyr_sensitivity', 'imu_odr', 'gnss_rate', 'header_string']
+    for key in scalar_keys:
+        if key in combined:
+            if key == 'number_of_segments':
+                result[key] = combined[key]
+            else:
+                result[key] = combined[key][0] if len(combined[key]) > 0 else None
+    
+    # Extract PPS arrays
+    pps_data = combined['pps']
+    if len(pps_data) > 0:
+        result['pps_micros'] = np.array([p.micros_reading for p in pps_data])
+        result['pps_micros_unwrapped'] = np.array([
+            p.micros_reading_unwrapped if p.micros_reading_unwrapped is not None else np.nan
+            for p in pps_data
+        ])
+        result['pps_utc'] = np.array([
+            p.utc_timestamp_from_pps_regression if p.utc_timestamp_from_pps_regression is not None else np.nan
+            for p in pps_data
+        ])
+    else:
+        result['pps_micros'] = np.array([])
+        result['pps_micros_unwrapped'] = np.array([])
+        result['pps_utc'] = np.array([])
+    
+    # Extract GNSS arrays
+    gnss_data = combined['gnss']
+    if len(gnss_data) > 0:
+        result['gnss_micros'] = np.array([g.micros_reading for g in gnss_data])
+        result['gnss_micros_unwrapped'] = np.array([
+            g.micros_reading_unwrapped if g.micros_reading_unwrapped is not None else np.nan
+            for g in gnss_data
+        ])
+        result['gnss_latitude'] = np.array([g.latitude_dd for g in gnss_data])
+        result['gnss_longitude'] = np.array([g.longitude_dd for g in gnss_data])
+        result['gnss_vel_north'] = np.array([g.ned_vel_north_mmps for g in gnss_data])
+        result['gnss_vel_east'] = np.array([g.ned_vel_east_mmps for g in gnss_data])
+        result['gnss_vel_down'] = np.array([g.ned_vel_down_mmps for g in gnss_data])
+        result['gnss_fix_type'] = np.array([g.fix_type for g in gnss_data])
+        result['gnss_posix'] = np.array([g.posix_timestamp + g.microseconds * 1e-6 for g in gnss_data])
+        result['gnss_utc'] = np.array([
+            g.utc_timestamp_from_pps_regression if g.utc_timestamp_from_pps_regression is not None else np.nan
+            for g in gnss_data
+        ])
+        # Outlier flags
+        result['gnss_latitude_outlier'] = np.array([g.latitude_dd_stdchecked for g in gnss_data], dtype=bool)
+        result['gnss_longitude_outlier'] = np.array([g.longitude_dd_stdchecked for g in gnss_data], dtype=bool)
+        result['gnss_vel_north_outlier'] = np.array([g.ned_vel_north_mmps_stdchecked for g in gnss_data], dtype=bool)
+        result['gnss_vel_east_outlier'] = np.array([g.ned_vel_east_mmps_stdchecked for g in gnss_data], dtype=bool)
+        result['gnss_vel_down_outlier'] = np.array([g.ned_vel_down_mmps_stdchecked for g in gnss_data], dtype=bool)
+    else:
+        result['gnss_micros'] = np.array([])
+        result['gnss_micros_unwrapped'] = np.array([])
+        result['gnss_latitude'] = np.array([])
+        result['gnss_longitude'] = np.array([])
+        result['gnss_vel_north'] = np.array([])
+        result['gnss_vel_east'] = np.array([])
+        result['gnss_vel_down'] = np.array([])
+        result['gnss_fix_type'] = np.array([])
+        result['gnss_posix'] = np.array([])
+        result['gnss_utc'] = np.array([])
+        result['gnss_latitude_outlier'] = np.array([], dtype=bool)
+        result['gnss_longitude_outlier'] = np.array([], dtype=bool)
+        result['gnss_vel_north_outlier'] = np.array([], dtype=bool)
+        result['gnss_vel_east_outlier'] = np.array([], dtype=bool)
+        result['gnss_vel_down_outlier'] = np.array([], dtype=bool)
+    
+    # Extract IMU arrays
+    imu_data = combined['imu']
+    if len(imu_data) > 0:
+        result['imu_micros'] = np.array([i.micros_reading for i in imu_data])
+        result['imu_micros_unwrapped'] = np.array([
+            i.micros_reading_unwrapped if i.micros_reading_unwrapped is not None else np.nan
+            for i in imu_data
+        ])
+        result['imu_counter'] = np.array([i.counter for i in imu_data])
+        result['imu_counter_unwrapped'] = np.array([
+            i.counter_unwrapped if i.counter_unwrapped is not None else np.nan
+            for i in imu_data
+        ])
+        result['imu_acc_x'] = np.array([i.acc_x_mg for i in imu_data])
+        result['imu_acc_y'] = np.array([i.acc_y_mg for i in imu_data])
+        result['imu_acc_z'] = np.array([i.acc_z_mg for i in imu_data])
+        result['imu_gyr_x'] = np.array([i.gyr_x_mdps for i in imu_data])
+        result['imu_gyr_y'] = np.array([i.gyr_y_mdps for i in imu_data])
+        result['imu_gyr_z'] = np.array([i.gyr_z_mdps for i in imu_data])
+        result['imu_utc'] = np.array([
+            i.utc_timestamp_from_pps_regression if i.utc_timestamp_from_pps_regression is not None else np.nan
+            for i in imu_data
+        ])
+        # Outlier flags
+        result['imu_acc_x_outlier'] = np.array([i.acc_x_mg_stdchecked for i in imu_data], dtype=bool)
+        result['imu_acc_y_outlier'] = np.array([i.acc_y_mg_stdchecked for i in imu_data], dtype=bool)
+        result['imu_acc_z_outlier'] = np.array([i.acc_z_mg_stdchecked for i in imu_data], dtype=bool)
+        result['imu_gyr_x_outlier'] = np.array([i.gyr_x_mdps_stdchecked for i in imu_data], dtype=bool)
+        result['imu_gyr_y_outlier'] = np.array([i.gyr_y_mdps_stdchecked for i in imu_data], dtype=bool)
+        result['imu_gyr_z_outlier'] = np.array([i.gyr_z_mdps_stdchecked for i in imu_data], dtype=bool)
+    else:
+        result['imu_micros'] = np.array([])
+        result['imu_micros_unwrapped'] = np.array([])
+        result['imu_counter'] = np.array([])
+        result['imu_counter_unwrapped'] = np.array([])
+        result['imu_acc_x'] = np.array([])
+        result['imu_acc_y'] = np.array([])
+        result['imu_acc_z'] = np.array([])
+        result['imu_gyr_x'] = np.array([])
+        result['imu_gyr_y'] = np.array([])
+        result['imu_gyr_z'] = np.array([])
+        result['imu_utc'] = np.array([])
+        result['imu_acc_x_outlier'] = np.array([], dtype=bool)
+        result['imu_acc_y_outlier'] = np.array([], dtype=bool)
+        result['imu_acc_z_outlier'] = np.array([], dtype=bool)
+        result['imu_gyr_x_outlier'] = np.array([], dtype=bool)
+        result['imu_gyr_y_outlier'] = np.array([], dtype=bool)
+        result['imu_gyr_z_outlier'] = np.array([], dtype=bool)
     
     return result
 

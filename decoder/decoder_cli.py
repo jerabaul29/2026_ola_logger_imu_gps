@@ -1,5 +1,39 @@
 #!/usr/bin/env python3
-"""CLI tool for decoding and visualizing OLA logger data files."""
+"""Command-line tool for decoding and visualizing OLA logger data files.
+
+This CLI tool provides comprehensive visualization of decoded data with 8 plots.
+It produces the same .npz output files as the programmatic API.
+
+**Usage:**
+
+    python decoder_cli.py -p DATA_BOOT_0000_TIME_20260204T193000.dat
+
+**Output:**
+
+1. Decodes the binary .dat file → creates .npz file  
+2. Generates 8 matplotlib plots:
+   - 3-axis acceleration (mg) with outlier detection
+   - 3-axis gyroscope (mdps) with outlier detection
+   - GNSS coordinates (lat/lon) with outlier detection
+   - GNSS velocities (NED frame) with outlier detection
+   - Time differences between consecutive entries
+   - PPS mismatch analysis (regression quality)
+   - IMU counter analysis (unwrapping and anomalies)
+   - Raw vs cleaned micros timestamps
+
+The .npz files created by the CLI are identical to those created by
+decode_file() in the Python API, and can be loaded with load_data_as_arrays().
+
+**Alternative: Programmatic Usage**
+
+For custom analysis or integration into your own scripts, use the Python API:
+
+    from decoder import decode_file, load_data_as_arrays
+    result = decode_file(Path("data.dat"))
+    data = load_data_as_arrays(result['file'])
+    
+See simple_example.py for a complete working example.
+"""
 
 from pathlib import Path
 

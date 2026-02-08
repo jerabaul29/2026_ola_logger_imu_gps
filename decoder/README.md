@@ -15,18 +15,29 @@ This decoder parses binary data files from the OLA logger and converts them into
 - **Timestamp Synchronization**: Linear regression between PPS and GNSS for microsecond-accurate UTC timestamps
 - **Overflow Handling**: Unwraps uint32_t and uint16_t wrapping in timestamps and counters
 - **Anomaly Detection**: Identifies missed samples and timing glitches
+- **Outlier Detection**: Statistical outlier detection for sensor readings and GPS data
+- **Segment-Based Processing**: Automatically segments data for robust GPS synchronization
+  - Time-based segmentation (~1 minute per segment based on IMU rate)
+  - Jump-based segmentation (splits on timing anomalies)
+  - Per-segment PPS regression with quality validation
+  - Small/bad segments automatically filtered
+- **User-Friendly API**: Load decoded data as numpy arrays ready for analysis
 
 **Note**: ASCII plots (for visualizing PPS mismatch) require `gnuplotlib`, which is optional. The decoder will work without it, but plots will be unavailable.
 
 ## Project Structure
 
 - `decoder.py` - Core decoding module with all parsing functions
-- `decoder_cli.py` - Command-line interface for decoding and visualization
-- `example_decode.py` - Example script showing programmatic usage
+- `decoder_cli.py` - Command-line interface for decoding and visualization  
+- **`simple_example.py`** - **Recommended starting point** - clean example of the typical workflow
+- `example_decode.py` - Detailed example showing dataclass usage
+- `example_segments.py` - Example of segment-based processing
 - `demo_corruption_recovery.py` - Demonstration of corruption recovery capabilities
-- `test_decoder.py` - Tests for decoder module
-- `test_decoder_cli.py` - Tests for CLI tool
-- `test_corruption_recovery.py` - Tests for corruption recovery
+- `test_decoder.py` - Core decoder tests
+- `test_decoder_cli.py` - CLI tool tests
+- `test_corruption_recovery.py` - Corruption recovery tests
+- `test_edge_cases.py` - Edge case tests
+- `test_outlier_detection.py` - Outlier detection tests
 - `environment.yml` - Mamba/conda environment specification
 - `AGENT.md` - Development guidelines and code practices
 - `SPEC.md` - Binary file format specification
@@ -50,85 +61,148 @@ mamba activate ola_ism330dhcx_samm10q_decoder
 
 ## Usage
 
-### Command-Line Interface (CLI)
+### Quick Start (Recommended for Most Users)
 
-The easiest way to decode and visualize data is using the CLI tool:
+The simplest way to decode and work with data:
 
 ```bash
-# Basic usage - decode file and show plots
+# Run the simple example script
+python simple_example.py
+```
+
+This script demonstrates the recommended workflow:
+1. **Decode** the binary `.dat` file → creates `.npz` file
+2. **Load** the `.npz` file as numpy arrays
+3. **Analyze** and plot the data
+
+The `simple_example.py` script shows clean, user-friendly code that you can adapt for your own analysis. It produces 3 plots: acceleration, gyroscope, and GPS track.
+
+### Command-Line Interface (CLI)
+
+For quick visualization and inspection without writing code:
+
+```bash
+# Decode file and display 8 plots
 python decoder_cli.py -p DATA_BOOT_0055_TIME_20260120T211500.dat
 
 # Show help
 python decoder_cli.py --help
 ```
 
-The CLI tool will:
-1. Decode the data file (showing decoder logs)
-2. Generate six matplotlib visualizations:
-   - 3-axis acceleration (mg)
-   - 3-axis gyroscope (mdps)
-   - GNSS coordinates (latitude/longitude over time)
-   - Time differences between consecutive IMU and GNSS entries (from both micros and UTC regression)
-   - PPS mismatch (UTC regression vs closest second)
-   - IMU counter (raw and unwrapped, with anomaly detection)
+The CLI tool generates comprehensive visualizations:
+- 3-axis acceleration (mg)
+- 3-axis gyroscope (mdps)
+- GNSS coordinates (latitude/longitude)
+- GNSS velocities (NED frame)
+- Time differences between entries
+- PPS mismatch analysis
+- Raw vs cleaned/unwrapped micros timestamps
+- IMU counter (with anomaly detection)
 
-### Example Script
+Both the CLI and programmatic usage produce **identical `.npz` files** - use whichever workflow suits your needs.
 
-Run the example to decode the sample data file:
+### Programmatic Usage (Recommended)
 
-```bash
-python example_decode.py
-```
-
-This will:
-1. Parse `DATA_BOOT_0055_TIME_20260120T211500.dat`
-2. Extract PPS, GNSS, and IMU data
-3. Save compressed `.npz` file containing all three data types
-4. Display sample entries
-
-### Programmatic Usage
+**Step 1: Decode the binary file**
 
 ```python
 from pathlib import Path
-import numpy as np
-from decoder import decode_file
+from decoder import decode_file, load_data_as_arrays
 
-# Decode a data file
-data_file = Path("DATA_BOOT_0055_TIME_20260120T211500.dat")
-# Set show_plots=True to display ASCII plots (disabled by default)
-output_files = decode_file(data_file, show_plots=False)
+# Decode the .dat file (creates .npz file)
+result = decode_file(Path("DATA_BOOT_0055_TIME_20260120T211500.dat"))
+npz_file = result['file']
+```
 
-# Load the decoded data from compressed archive
-npz_file = output_files["file"]
-with np.load(npz_file, allow_pickle=True) as data:
-    pps_data = data["pps"]
-    gnss_data = data["gnss"]
-    imu_data = data["imu"]
-    
-    # Access header information
-    header_string = data["header_string"][0]  # Full header text
-    acc_sens = data["acc_sensitivity"][0]     # Accelerometer sensitivity (mg/LSB)
-    gyr_sens = data["gyr_sensitivity"][0]     # Gyroscope sensitivity (mdps/LSB)
-    imu_odr = data["imu_odr"][0]              # IMU output data rate (Hz)
-    gnss_rate = data["gnss_rate"][0]          # GNSS update rate (Hz)
-    firmware = data["firmware_commit"][0]     # Firmware commit ID
+**Step 2: Load as numpy arrays (easiest way)**
 
-# Access individual entries
-print(f"First PPS: {pps_data[0]}")
-print(f"First GNSS: {gnss_data[0]}")
-print(f"First IMU: {imu_data[0]}")
+```python
+# Load all data as numpy arrays - ready for analysis!
+data = load_data_as_arrays(npz_file)
 
-# IMU data includes scaled values with units
-print(f"Acceleration X: {imu_data[0].acc_x_mg} mg")
-print(f"Gyro X: {imu_data[0].gyr_x_mdps} mdps")
+# Access header info (scalars)
+print(f"Firmware: {data['firmware_commit']}")
+print(f"IMU rate: {data['imu_odr']} Hz")
+print(f"GNSS rate: {data['gnss_rate']} Hz")
+print(f"Segments: {data['number_of_segments']}")
 
-# All entries include synchronized UTC timestamps from PPS regression
-print(f"IMU timestamp (MCU micros): {imu_data[0].micros_reading}")
-print(f"IMU timestamp (UTC posix): {imu_data[0].utc_timestamp_from_pps_regression}")
-print(f"IMU timestamp (UTC datetime): {imu_data[0].datetime_timestamp_from_pps_regression}")
+# Access IMU data (numpy arrays)
+imu_time = data['imu_utc']              # UTC timestamps (s)
+acc_x = data['imu_acc_x']                # X acceleration (mg)
+acc_y = data['imu_acc_y']                # Y acceleration (mg)
+acc_z = data['imu_acc_z']                # Z acceleration (mg)
+gyr_x = data['imu_gyr_x']                # X angular velocity (mdps)
+acc_x_outliers = data['imu_acc_x_outlier']  # Outlier flags (bool array)
 
-# Enable ASCII plots for visualization (disabled by default)
-output_files_with_plots = decode_file(data_file, show_plots=True)
+# Access GNSS data (numpy arrays)
+gnss_time = data['gnss_utc']            # UTC timestamps (s)
+lat = data['gnss_latitude']              # Latitude (degrees)
+lon = data['gnss_longitude']             # Longitude (degrees)
+vel_n = data['gnss_vel_north']           # North velocity (mm/s)
+vel_e = data['gnss_vel_east']            # East velocity (mm/s)
+
+# Access PPS data (numpy arrays)
+pps_time = data['pps_utc']              # UTC timestamps (s)
+```
+
+**Step 3: Plot or analyze**
+
+```python
+import matplotlib.pyplot as plt
+
+# Plot acceleration
+plt.figure(figsize=(12, 6))
+plt.plot(data['imu_utc'], data['imu_acc_x'], label='X')
+plt.plot(data['imu_utc'], data['imu_acc_y'], label='Y')
+plt.plot(data['imu_utc'], data['imu_acc_z'], label='Z')
+plt.xlabel('UTC Time (s)')
+plt.ylabel('Acceleration (mg)')
+plt.legend()
+plt.show()
+
+# Plot GPS track
+plt.figure(figsize=(10, 8))
+plt.plot(data['gnss_longitude'], data['gnss_latitude'])
+plt.xlabel('Longitude (°)')
+plt.ylabel('Latitude (°)')
+plt.title('GPS Track')
+plt.show()
+```
+
+**Alternative: Load as dataclass objects**
+
+If you need the full dataclass objects instead of arrays:
+
+```python
+from decoder import load_and_combine_segments
+
+# Load and combine all segments
+combined = load_and_combine_segments(npz_file)
+
+# Access as arrays of dataclass objects
+pps_objects = combined['pps']      # Array of PPSFix objects
+gnss_objects = combined['gnss']    # Array of GNSSReading objects  
+imu_objects = combined['imu']      # Array of IMUReading objects
+
+# Access individual fields
+first_imu = imu_objects[0]
+print(f"Acceleration: ({first_imu.acc_x_mg}, {first_imu.acc_y_mg}, {first_imu.acc_z_mg}) mg")
+print(f"UTC time: {first_imu.utc_timestamp_from_pps_regression} s")
+```
+
+### Other Example Scripts
+
+Additional examples are available:
+
+```bash
+# Detailed example showing dataclass usage
+python example_decode.py
+
+# Segment-based processing example
+python example_segments.py
+
+# Corruption recovery demonstration
+python demo_corruption_recovery.py
 ```
 
 ## Corruption Recovery
@@ -198,16 +272,37 @@ complexipy decoder.py
 ## Output Files
 
 For each input file `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.dat`, the decoder generates:
-- `DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.npz` - Compressed numpy archive containing:
-  - `pps` - Array of PPSFix objects
-  - `gnss` - Array of GNSSReading objects
-  - `imu` - Array of IMUReading objects
-  - `header_string` - Array containing the full header text (single string)
-  - `acc_sensitivity` - Array containing accelerometer sensitivity in mg/LSB (single float)
-  - `gyr_sensitivity` - Array containing gyroscope sensitivity in mdps/LSB (single float)
-  - `imu_odr` - Array containing IMU output data rate in Hz (single float)
-  - `gnss_rate` - Array containing GNSS update rate in Hz (single float)
-  - `firmware_commit` - Array containing firmware commit ID (single string)
+
+**`DATA_BOOT_XXXX_TIME_YYYYMMDDTHHMMSS.npz`** - Compressed numpy archive
+
+### NPZ File Structure
+
+The `.npz` file uses **segment-based storage** but is easily loaded as combined arrays using `load_data_as_arrays()`. 
+
+**Internal structure** (for advanced users):
+- `number_of_segments` - Number of data segments (scalar)
+- `pps_segment000`, `pps_segment001`, ... - PPS data per segment
+- `gnss_segment000`, `gnss_segment001`, ... - GNSS data per segment
+- `imu_segment000`, `imu_segment001`, ... - IMU data per segment
+- `header_string`, `firmware_commit`, `acc_sensitivity`, `gyr_sensitivity`, `imu_odr`, `gnss_rate` - Header metadata
+
+**Recommended access** (for end users):
+
+```python
+from decoder import load_data_as_arrays
+
+# Load all data as numpy arrays (segments automatically combined)
+data = load_data_as_arrays(npz_file)
+
+# Returns dictionary with all fields as numpy arrays:
+# - Header: firmware_commit, imu_odr, gnss_rate, acc_sensitivity, gyr_sensitivity
+# - PPS: pps_utc, pps_micros, pps_micros_unwrapped
+# - GNSS: gnss_utc, gnss_latitude, gnss_longitude, gnss_vel_*, gnss_fix_type
+# - IMU: imu_utc, imu_acc_*, imu_gyr_*, imu_counter
+# - Outliers: *_outlier (boolean arrays marking detected outliers)
+```
+
+See the docstring of `load_data_as_arrays()` for a complete list of available fields.
 
 ## Data Structures
 
@@ -280,3 +375,67 @@ The decoder reports statistics on detected wraps and jumps for each data type. F
 ## File Format
 
 See `SPEC.md` for detailed information about the binary file format.
+
+---
+
+## Quick Reference
+
+### For End Users (Most Common)
+
+**Decode and analyze in 3 lines:**
+```python
+from decoder import decode_file, load_data_as_arrays
+result = decode_file(Path("data.dat"))
+data = load_data_as_arrays(result['file'])
+# Now use: data['imu_acc_x'], data['gnss_latitude'], etc.
+```
+
+**Or use the CLI for quick inspection:**
+```bash
+python decoder_cli.py -p data.dat  # Creates .npz + shows 8 plots
+```
+
+### Common Data Access Patterns
+
+```python
+# Header/metadata
+firmware = data['firmware_commit']
+imu_rate = data['imu_odr']  # Hz
+n_segments = data['number_of_segments']
+
+# IMU data
+times = data['imu_utc']  # UTC timestamps (s)
+acc_x = data['imu_acc_x']  # X acceleration (mg)
+acc_outliers = data['imu_acc_x_outlier']  # Boolean mask
+
+# GNSS data
+lat = data['gnss_latitude']  # Latitude (degrees)
+lon = data['gnss_longitude']  # Longitude (degrees)
+vel_n = data['gnss_vel_north']  # North velocity (mm/s)
+
+# PPS data (rarely needed by users)
+pps_times = data['pps_utc']  # PPS UTC timestamps (s)
+```
+
+### Key Files
+
+- **`simple_example.py`** - Start here! Complete working example
+- **`decoder.py`** - Main module with `decode_file()` and `load_data_as_arrays()`
+- **`decoder_cli.py`** - Command-line tool for visualization
+- **`README.md`** - Full documentation (you are here)
+- **`SPEC.md`** - Binary file format specification
+
+### Data Units
+
+- **Time**: seconds (UTC POSIX timestamps)
+- **Acceleration**: milli-g (mg), where 1g ≈ 9.81 m/s²
+- **Angular velocity**: millidegrees per second (mdps)
+- **Position**: decimal degrees
+- **Velocity**: millimeters per second (mm/s)
+
+### Support
+
+- Questions about file format → See `SPEC.md`
+- Development guidelines → See `AGENT.md`
+- Example usage → See `simple_example.py`
+- All tests → Run `pytest -v`
