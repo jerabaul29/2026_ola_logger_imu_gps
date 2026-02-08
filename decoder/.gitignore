@@ -23,3 +23,7 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+*.png
+*.jpg
+*.pdf
