@@ -501,3 +501,58 @@ def test_unwrap_counter_carryover():
     # Verify monotonic increase from seg1 to seg2
     assert seg2_unwrapped[0] > seg1_unwrapped[-1]
     assert seg2_unwrapped[0] - seg1_unwrapped[-1] == 1  # Should increment by 1
+
+
+def test_small_segment_handling():
+    """Test that small segments (insufficient PPS for regression) are skipped gracefully.
+    
+    Uses the real file DATA_BOOT_000093_TIME_20260208T133001.dat which has a small
+    final segment with only 1 PPS entry (insufficient for regression).
+    """
+    from pathlib import Path
+    from decoder import decode_file, load_and_combine_segments
+    
+    # Test with real file that has a small segment
+    test_file = Path("DATA_BOOT_000093_TIME_20260208T133001.dat")
+    if not test_file.exists():
+        pytest.skip("Test file with small segment not available")
+    
+    # This file has 17 segments total, with segment 16 being too small (1 PPS)
+    # Decode should succeed by skipping the small segment
+    from tempfile import TemporaryDirectory
+    
+    with TemporaryDirectory() as tmpdir:
+        result = decode_file(test_file, output_dir=Path(tmpdir))
+        assert result is not None, "Decode should succeed even with small segment"
+        
+        # Extract the NPZ file path from the result dict
+        npz_file = result['file']
+        
+        # Load the data
+        data = load_and_combine_segments(npz_file)
+        
+        # Verify data was loaded successfully
+        assert len(data['pps']) > 0, "Should have PPS data"
+        assert len(data['gnss']) > 0, "Should have GNSS data"
+        assert len(data['imu']) > 0, "Should have IMU data"
+        
+        # Verify all IMU entries have valid UTC timestamps
+        # (small segment without regression was skipped)
+        none_count = sum(
+            1 for imu in data['imu'] 
+            if imu.utc_timestamp_from_pps_regression is None
+        )
+        assert none_count == 0, \
+            f"All IMU entries should have UTC timestamps (small segments skipped), " \
+            f"but {none_count} entries have None"
+        
+        # Verify timestamps are reasonable
+        valid_timestamps = [
+            imu.utc_timestamp_from_pps_regression 
+            for imu in data['imu'] 
+            if imu.utc_timestamp_from_pps_regression is not None
+        ]
+        assert all(ts > 1.7e9 for ts in valid_timestamps), \
+            "All timestamps should be reasonable (> year 2023)"
+
+

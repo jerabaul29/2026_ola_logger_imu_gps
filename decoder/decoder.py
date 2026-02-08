@@ -1825,6 +1825,40 @@ def decode_file(
                     f"{n_pos_outliers} position, {n_vel_outliers} velocity"
                 )
 
+    # Filter out segments that are too small for meaningful GPS synchronization
+    # Only applies when: (1) file has GNSS data, AND (2) there are multiple segments
+    # Small segments in single-segment files or non-GNSS files are kept
+    has_any_gnss = any(len(seg['gnss_list']) > 0 for seg in segments)
+    has_multiple_segments = len(segments) > 1
+    
+    valid_segments = []
+    skipped_segments = []
+    
+    for seg_idx, segment in enumerate(segments):
+        pps_count = len(segment['pps_list'])
+        gnss_count = len(segment['gnss_list'])
+        imu_count = len(segment['imu_list'])
+        
+        # Only filter small segments if:
+        # - File has GNSS data (need GPS sync)
+        # - File has multiple segments (one small segment at end is problematic)
+        should_filter = has_any_gnss and has_multiple_segments
+        
+        if should_filter and (pps_count < 2 or gnss_count < 1):
+            skipped_segments.append(seg_idx)
+            logger.warning(
+                f"Skipping segment {seg_idx} (insufficient for GPS sync): "
+                f"{pps_count} PPS, {gnss_count} GNSS, {imu_count} IMU entries"
+            )
+        else:
+            valid_segments.append(segment)
+    
+    if skipped_segments:
+        logger.info(f"Skipped {len(skipped_segments)} small segment(s): {skipped_segments}")
+    
+    # Use valid segments for saving
+    segments = valid_segments
+
     # Print overall summary statistics
     total_pps = sum(len(seg['pps_list']) for seg in segments)
     total_gnss = sum(len(seg['gnss_list']) for seg in segments)
