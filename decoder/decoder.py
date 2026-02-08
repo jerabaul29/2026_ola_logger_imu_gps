@@ -289,6 +289,11 @@ def detect_outliers_stdcheck(
     2. Compute mean and std from these neighbors (excluding point i itself)
     3. Flag point i if |value[i] - mean| > n_sigma * std
     
+    Special cases:
+    - NaN/inf values are flagged as outliers
+    - When all neighbors are identical (std=0), flag if value differs
+    - Empty arrays or arrays with all NaN return empty result
+    
     Args:
         values: 1D array of time series values
         n_neighbors: Number of neighbors to use for statistics (default: 6)
@@ -303,9 +308,20 @@ def detect_outliers_stdcheck(
         >>> outliers
         array([3])  # Index 3 (value=10.0) is an outlier
     """
-    if len(values) < n_neighbors + 1:
-        # Not enough data points for outlier detection
+    # Input validation
+    if len(values) == 0:
         return np.array([], dtype=np.int64)
+    
+    # Check for all-NaN or all-inf arrays
+    finite_mask = np.isfinite(values)
+    if not np.any(finite_mask):
+        # All values are NaN/inf - return all indices as outliers
+        return np.arange(len(values), dtype=np.int64)
+    
+    if len(values) < n_neighbors + 1:
+        # Not enough data points for meaningful outlier detection
+        # Flag NaN/inf values only
+        return np.where(~finite_mask)[0].astype(np.int64)
     
     outlier_indices = []
     n = len(values)
@@ -314,6 +330,11 @@ def detect_outliers_stdcheck(
     half_neighbors = n_neighbors // 2
     
     for i in range(n):
+        # Flag NaN/inf values immediately
+        if not np.isfinite(values[i]):
+            outlier_indices.append(i)
+            continue
+        
         # Determine neighbor indices based on position
         if i < half_neighbors:
             # Near start: take neighbors to the right
@@ -342,9 +363,15 @@ def detect_outliers_stdcheck(
             
         neighbor_values = values[neighbor_indices]
         
-        # Compute statistics from neighbors
-        mean_val = np.mean(neighbor_values)
-        std_val = np.std(neighbor_values, ddof=1)  # Use sample std
+        # Filter out NaN/inf from neighbors
+        finite_neighbors = neighbor_values[np.isfinite(neighbor_values)]
+        if len(finite_neighbors) < 2:
+            # Not enough valid neighbors for statistics
+            continue
+        
+        # Compute statistics from valid neighbors
+        mean_val = np.mean(finite_neighbors)
+        std_val = np.std(finite_neighbors, ddof=1)  # Use sample std
         
         # Check if current value is an outlier
         deviation = abs(values[i] - mean_val)
@@ -358,6 +385,29 @@ def detect_outliers_stdcheck(
                 outlier_indices.append(i)
     
     return np.array(outlier_indices, dtype=np.int64)
+
+
+def apply_outlier_flags(
+    data_list: list,
+    field_name: str,
+    outlier_indices: np.ndarray
+) -> None:
+    """Apply outlier flags to a list of dataclass objects.
+    
+    This is a helper function to efficiently set boolean flags for detected outliers.
+    
+    Args:
+        data_list: List of dataclass objects (IMUReading or GNSSReading)
+        field_name: Name of the boolean flag field to set (e.g., 'acc_x_mg_stdchecked')
+        outlier_indices: Array of indices where outliers were detected
+        
+    Example:
+        >>> imu_list = [IMUReading(...), IMUReading(...), ...]
+        >>> outliers = detect_outliers_stdcheck(acc_x_values)
+        >>> apply_outlier_flags(imu_list, 'acc_x_mg_stdchecked', outliers)
+    """
+    for idx in outlier_indices:
+        setattr(data_list[idx], field_name, True)
 
 
 def compute_pps_regression(
@@ -405,32 +455,49 @@ def compute_pps_regression(
         return None
 
     # Get unwrapped micros for both PPS and GNSS
-    pps_micros_unwrapped = [
+    pps_micros_unwrapped = np.array([
         p.micros_reading_unwrapped if p.micros_reading_unwrapped is not None
         else p.micros_reading
         for p in pps_list
-    ]
-    gnss_micros_unwrapped = [
+    ], dtype=np.int64)
+    gnss_micros_unwrapped = np.array([
         g.micros_reading_unwrapped if g.micros_reading_unwrapped is not None
         else g.micros_reading
         for g in gnss_list
-    ]
+    ], dtype=np.int64)
 
     # For each PPS entry, find the closest GNSS entry by micros
     # and determine which UTC second boundary the PPS marks
     pps_matched_micros = []
     pps_matched_utc = []
 
-    for pps_micros in pps_micros_unwrapped:
-        # Find closest GNSS entry
-        min_diff = float("inf")
-        closest_gnss_idx = 0
+    # Use binary search for efficient closest neighbor finding
+    # Sort GNSS micros if not already sorted (should be in chronological order)
+    gnss_sorted_indices = np.argsort(gnss_micros_unwrapped)
+    gnss_micros_sorted = gnss_micros_unwrapped[gnss_sorted_indices]
 
-        for j, gnss_micros in enumerate(gnss_micros_unwrapped):
-            diff = abs(gnss_micros - pps_micros)
-            if diff < min_diff:
-                min_diff = diff
-                closest_gnss_idx = j
+    for pps_micros in pps_micros_unwrapped:
+        # Find insertion point using binary search
+        insert_idx = np.searchsorted(gnss_micros_sorted, pps_micros)
+        
+        # Check neighbors around insertion point to find closest
+        candidates = []
+        if insert_idx > 0:
+            candidates.append(insert_idx - 1)
+        if insert_idx < len(gnss_micros_sorted):
+            candidates.append(insert_idx)
+        
+        # Find the closest candidate
+        if not candidates:
+            continue
+            
+        closest_sorted_idx = min(
+            candidates,
+            key=lambda idx: abs(gnss_micros_sorted[idx] - pps_micros)
+        )
+        
+        # Map back to original GNSS list index
+        closest_gnss_idx = gnss_sorted_indices[closest_sorted_idx]
 
         # Get the UTC timestamp from the matched GNSS entry
         gnss_entry = gnss_list[closest_gnss_idx]
@@ -1714,18 +1781,12 @@ def decode_file(
             gyr_z_outliers = detect_outliers_stdcheck(gyr_z_values)
             
             # Flag outliers in the data structures
-            for idx in acc_x_outliers:
-                imu_list[idx].acc_x_mg_stdchecked = True
-            for idx in acc_y_outliers:
-                imu_list[idx].acc_y_mg_stdchecked = True
-            for idx in acc_z_outliers:
-                imu_list[idx].acc_z_mg_stdchecked = True
-            for idx in gyr_x_outliers:
-                imu_list[idx].gyr_x_mdps_stdchecked = True
-            for idx in gyr_y_outliers:
-                imu_list[idx].gyr_y_mdps_stdchecked = True
-            for idx in gyr_z_outliers:
-                imu_list[idx].gyr_z_mdps_stdchecked = True
+            apply_outlier_flags(imu_list, 'acc_x_mg_stdchecked', acc_x_outliers)
+            apply_outlier_flags(imu_list, 'acc_y_mg_stdchecked', acc_y_outliers)
+            apply_outlier_flags(imu_list, 'acc_z_mg_stdchecked', acc_z_outliers)
+            apply_outlier_flags(imu_list, 'gyr_x_mdps_stdchecked', gyr_x_outliers)
+            apply_outlier_flags(imu_list, 'gyr_y_mdps_stdchecked', gyr_y_outliers)
+            apply_outlier_flags(imu_list, 'gyr_z_mdps_stdchecked', gyr_z_outliers)
             
             n_acc_outliers = len(acc_x_outliers) + len(acc_y_outliers) + len(acc_z_outliers)
             n_gyr_outliers = len(gyr_x_outliers) + len(gyr_y_outliers) + len(gyr_z_outliers)
@@ -1750,16 +1811,11 @@ def decode_file(
             vel_d_outliers = detect_outliers_stdcheck(vel_d_values)
             
             # Flag outliers in the data structures
-            for idx in lat_outliers:
-                gnss_list[idx].latitude_dd_stdchecked = True
-            for idx in lon_outliers:
-                gnss_list[idx].longitude_dd_stdchecked = True
-            for idx in vel_n_outliers:
-                gnss_list[idx].ned_vel_north_mmps_stdchecked = True
-            for idx in vel_e_outliers:
-                gnss_list[idx].ned_vel_east_mmps_stdchecked = True
-            for idx in vel_d_outliers:
-                gnss_list[idx].ned_vel_down_mmps_stdchecked = True
+            apply_outlier_flags(gnss_list, 'latitude_dd_stdchecked', lat_outliers)
+            apply_outlier_flags(gnss_list, 'longitude_dd_stdchecked', lon_outliers)
+            apply_outlier_flags(gnss_list, 'ned_vel_north_mmps_stdchecked', vel_n_outliers)
+            apply_outlier_flags(gnss_list, 'ned_vel_east_mmps_stdchecked', vel_e_outliers)
+            apply_outlier_flags(gnss_list, 'ned_vel_down_mmps_stdchecked', vel_d_outliers)
             
             n_pos_outliers = len(lat_outliers) + len(lon_outliers)
             n_vel_outliers = len(vel_n_outliers) + len(vel_e_outliers) + len(vel_d_outliers)
