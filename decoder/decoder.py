@@ -414,7 +414,7 @@ def compute_pps_regression(
     pps_list: list[PPSFix],
     gnss_list: list[GNSSReading],
     global_min_micros: int | None = None,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, float] | None:
     """Compute linear regression from PPS micros to UTC timestamps.
 
     This function synchronizes MCU microsecond timestamps to absolute UTC time
@@ -426,12 +426,13 @@ def compute_pps_regression(
     1. Uses unwrapped micros timestamps for both PPS and GNSS data
     2. For each PPS event, finds the temporally closest GNSS measurement
     3. Uses GNSS UTC time to determine which second boundary the PPS marks
-    4. Performs linear regression with improved normalization:
+    4. Applies outlier filtering with n_neighbors=4, n_sigma=1.0 (if ≥7 pairs)
+    5. Performs linear regression with improved normalization:
        - Subtracts minimum from both micros and UTC timestamps
        - Converts micros offset to seconds
        - Normalizes both quantities to max value of 1.0
        - This improves numerical stability and precision of the regression
-    5. Transforms coefficients back to original scale: UTC_time = slope × micros + intercept
+    6. Transforms coefficients back to original scale: UTC_time = slope × micros + intercept
 
     Args:
         pps_list: List of PPS fixes (must have micros_reading_unwrapped populated)
@@ -440,7 +441,7 @@ def compute_pps_regression(
                           stability (defaults to min of pps_list if not provided)
 
     Returns:
-        Tuple of (slope, intercept) for the linear regression: UTC = slope*micros + intercept
+        Tuple of (slope, intercept, r_squared) for the linear regression
         Returns None if insufficient data (empty lists or fewer than 2 PPS entries)
     """
     if not pps_list or not gnss_list:
@@ -515,6 +516,65 @@ def compute_pps_regression(
         pps_matched_micros.append(pps_micros)
         pps_matched_utc.append(float(utc_second))
 
+    # Apply outlier filtering to matched pairs before regression
+    # Use stricter thresholds (n_neighbors=4, n_sigma=1.0) for high accuracy
+    # Only filter if we have enough data points
+    pps_matched_micros_array = np.array(pps_matched_micros, dtype=np.float64)
+    pps_matched_utc_array = np.array(pps_matched_utc, dtype=np.float64)
+    
+    n_pairs_before = len(pps_matched_micros_array)
+    
+    if n_pairs_before >= 7:  # Need at least 7 points for filtering with n_neighbors=4
+        # Detect outliers in micros values
+        micros_outliers = detect_outliers_stdcheck(
+            pps_matched_micros_array, n_neighbors=4, n_sigma=1.0
+        )
+        
+        # Detect outliers in UTC values
+        utc_outliers = detect_outliers_stdcheck(
+            pps_matched_utc_array, n_neighbors=4, n_sigma=1.0
+        )
+        
+        # Combine outlier indices (union)
+        all_outliers = np.unique(np.concatenate([micros_outliers, utc_outliers]))
+        
+        if len(all_outliers) > 0:
+            # Create mask of valid (non-outlier) indices
+            valid_mask = np.ones(n_pairs_before, dtype=bool)
+            valid_mask[all_outliers] = False
+            
+            # Filter out outliers
+            pps_matched_micros_filtered = pps_matched_micros_array[valid_mask].tolist()
+            pps_matched_utc_filtered = pps_matched_utc_array[valid_mask].tolist()
+            
+            n_removed = len(all_outliers)
+            logger.info(
+                f"Filtered {n_removed} outlier(s) from PPS-GNSS pairs "
+                f"({n_pairs_before} → {len(pps_matched_micros_filtered)} pairs)"
+            )
+            
+            # Check if we still have enough data after filtering
+            if len(pps_matched_micros_filtered) < 2:
+                logger.warning(
+                    f"Too few pairs remaining after outlier filtering "
+                    f"({len(pps_matched_micros_filtered)}), using unfiltered data"
+                )
+                pps_matched_micros = pps_matched_micros
+                pps_matched_utc = pps_matched_utc
+            else:
+                pps_matched_micros = pps_matched_micros_filtered
+                pps_matched_utc = pps_matched_utc_filtered
+        else:
+            # No outliers detected, use original data
+            pps_matched_micros = pps_matched_micros_array.tolist()
+            pps_matched_utc = pps_matched_utc_array.tolist()
+    else:
+        # Too few points for meaningful outlier detection, skip filtering
+        logger.debug(
+            f"Skipping outlier filtering: only {n_pairs_before} pairs "
+            f"(need ≥7 for n_neighbors=4)"
+        )
+
     # Perform linear regression with improved normalization
     # To avoid numerical inaccuracies:
     # 1. Subtract minimum from both micros and UTC
@@ -570,7 +630,8 @@ def compute_pps_regression(
     logger.info(f"  Normalization: micros range {min_micros} to {min_micros + max_micros_sec*1e6:.0f} µs")
     logger.info(f"  Normalization: UTC range {min_utc:.1f} to {min_utc + max_utc:.1f} s")
 
-    return (slope, intercept)
+    r_squared = r_value ** 2
+    return (slope, intercept, r_squared)
 
 
 def apply_pps_regression(
@@ -777,7 +838,7 @@ def parse_imu_entry(
 def compute_pps_mismatch_statistics(
     pps_list: list[PPSFix],
     show_plot: bool = False
-) -> None:
+) -> float | None:
     """Compute and display PPS mismatch statistics to assess regression quality.
     
     Evaluates how well the linear regression aligns PPS events to exact UTC
@@ -796,17 +857,20 @@ def compute_pps_mismatch_statistics(
         show_plot: If True, display ASCII terminal plot using gnuplotlib
                   (silently skips if gnuplotlib not available)
     
+    Returns:
+        Maximum absolute mismatch in seconds, or None if unable to compute
+    
     Note:
         Typical good results: max < 5ms, RMS < 2ms for R² > 0.999999
     """
     if not pps_list:
         logger.warning("No PPS data available for mismatch analysis")
-        return
+        return None
 
     # Check if regression was computed
     if pps_list[0].utc_timestamp_from_pps_regression is None:
         logger.warning("PPS regression not computed, skipping mismatch analysis")
-        return
+        return None
 
     # Compute mismatch for each PPS entry
     mismatches = []
@@ -829,6 +893,8 @@ def compute_pps_mismatch_statistics(
     logger.info(f"  Max absolute mismatch: {max_mismatch * 1000:.3f} ms")
     logger.info(f"  Mean mismatch:         {mean_mismatch * 1000:.3f} ms")
     logger.info(f"  RMS mismatch:          {rms_mismatch * 1000:.3f} ms")
+    
+    return max_mismatch
 
     if show_plot:
         if not GNUPLOT_AVAILABLE:
@@ -1749,13 +1815,47 @@ def decode_file(
         # Compute PPS regression for this segment
         logger.info(f"Computing PPS to UTC timestamp regression for segment {seg_idx}...")
         regression = compute_pps_regression(pps_list, gnss_list, segment_min_micros)
+        
+        # Track regression quality for filtering
+        segment['regression_valid'] = False
+        
         if regression is None:
             logger.warning(f"Skipping PPS regression for segment {seg_idx} due to insufficient data")
         else:
-            slope, intercept = regression
+            slope, intercept, r_squared = regression
             apply_pps_regression(pps_list, gnss_list, imu_list, slope, intercept)
+            
+            # Check PPS mismatch statistics
+            max_mismatch = None
             if pps_list:
-                compute_pps_mismatch_statistics(pps_list)
+                max_mismatch = compute_pps_mismatch_statistics(pps_list)
+            
+            # Validate regression quality
+            # Thresholds: R² ≥ 0.99 and max mismatch ≤ 200ms
+            R2_THRESHOLD = 0.99
+            MAX_MISMATCH_THRESHOLD = 0.200  # 200ms in seconds
+            
+            regression_good = True
+            if r_squared < R2_THRESHOLD:
+                logger.error(
+                    f"⚠️  Poor regression quality in segment {seg_idx}: "
+                    f"R²={r_squared:.6f} < {R2_THRESHOLD} threshold"
+                )
+                regression_good = False
+            
+            if max_mismatch is not None and max_mismatch > MAX_MISMATCH_THRESHOLD:
+                logger.error(
+                    f"⚠️  Excessive PPS mismatch in segment {seg_idx}: "
+                    f"max={max_mismatch*1000:.1f}ms > {MAX_MISMATCH_THRESHOLD*1000:.0f}ms threshold"
+                )
+                regression_good = False
+            
+            if not regression_good:
+                logger.error(
+                    f"❌ Segment {seg_idx} has poor GPS synchronization and will be discarded"
+                )
+            else:
+                segment['regression_valid'] = True
 
         # Print summary statistics for this segment
         logger.info(
@@ -1826,6 +1926,7 @@ def decode_file(
                 )
 
     # Filter out segments that are too small for meaningful GPS synchronization
+    # OR have poor regression quality (bad R² or high mismatch)
     # Only applies when: (1) file has GNSS data, AND (2) there are multiple segments
     # Small segments in single-segment files or non-GNSS files are kept
     has_any_gnss = any(len(seg['gnss_list']) > 0 for seg in segments)
@@ -1833,21 +1934,36 @@ def decode_file(
     
     valid_segments = []
     skipped_segments = []
+    bad_regression_segments = []
     
     for seg_idx, segment in enumerate(segments):
         pps_count = len(segment['pps_list'])
         gnss_count = len(segment['gnss_list'])
         imu_count = len(segment['imu_list'])
         
+        # Check if segment has poor regression quality
+        has_bad_regression = not segment.get('regression_valid', False)
+        
         # Only filter small segments if:
         # - File has GNSS data (need GPS sync)
         # - File has multiple segments (one small segment at end is problematic)
-        should_filter = has_any_gnss and has_multiple_segments
+        should_filter_small = has_any_gnss and has_multiple_segments
         
-        if should_filter and (pps_count < 2 or gnss_count < 1):
+        # Filter segments with bad regression quality only if file has:
+        # - GNSS data (need GPS sync)
+        # - Multiple segments (single segment files are kept even with bad regression)
+        should_filter_regression = has_any_gnss and has_bad_regression and pps_count >= 2 and has_multiple_segments
+        
+        if should_filter_small and (pps_count < 2 or gnss_count < 1):
             skipped_segments.append(seg_idx)
             logger.warning(
                 f"Skipping segment {seg_idx} (insufficient for GPS sync): "
+                f"{pps_count} PPS, {gnss_count} GNSS, {imu_count} IMU entries"
+            )
+        elif should_filter_regression:
+            bad_regression_segments.append(seg_idx)
+            logger.warning(
+                f"Skipping segment {seg_idx} (poor GPS sync quality): "
                 f"{pps_count} PPS, {gnss_count} GNSS, {imu_count} IMU entries"
             )
         else:
@@ -1855,6 +1971,8 @@ def decode_file(
     
     if skipped_segments:
         logger.info(f"Skipped {len(skipped_segments)} small segment(s): {skipped_segments}")
+    if bad_regression_segments:
+        logger.info(f"Skipped {len(bad_regression_segments)} bad regression segment(s): {bad_regression_segments}")
     
     # Use valid segments for saving
     segments = valid_segments

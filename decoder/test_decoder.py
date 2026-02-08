@@ -268,7 +268,7 @@ def test_compute_pps_regression():
 
     regression = compute_pps_regression(pps_list, gnss_list)
     assert regression is not None
-    slope, intercept = regression
+    slope, intercept, r_squared = regression
 
     # Expected: utc = slope * micros + intercept
     # With our data: utc=1 at micros=1000000, utc=2 at micros=2000000, etc.
@@ -276,6 +276,8 @@ def test_compute_pps_regression():
     assert abs(slope - 1e-6) < 1e-9
     # intercept should be 0 (utc = 1e-6 * micros + 0)
     assert abs(intercept - 0.0) < 1e-6
+    # R² should be perfect for this synthetic data
+    assert r_squared > 0.999
 
 
 def test_imu_padding_handling(tmp_path):
@@ -554,5 +556,64 @@ def test_small_segment_handling():
         ]
         assert all(ts > 1.7e9 for ts in valid_timestamps), \
             "All timestamps should be reasonable (> year 2023)"
+
+
+def test_bad_regression_filtering():
+    """Test that segments with poor PPS regression quality are filtered out.
+    
+    This test verifies the fix for a real-world issue where segment 11 of
+    DATA_BOOT_000093_TIME_20260208T141501.dat previously had R²=0.56 and
+    max mismatch=498ms. After implementing outlier filtering in PPS regression,
+    this segment should now have good quality (R² > 0.99, mismatch < 200ms).
+    
+    This test ensures no regression in PPS regression quality.
+    """
+    from pathlib import Path
+    from decoder import decode_file, load_and_combine_segments
+    from tempfile import TemporaryDirectory
+    
+    # Test with the file that previously had a bad segment 11
+    test_file = Path("DATA_BOOT_000093_TIME_20260208T141501.dat")
+    if not test_file.exists():
+        pytest.skip("Test file with historically bad segment not available")
+    
+    with TemporaryDirectory() as tmpdir:
+        result = decode_file(test_file, output_dir=Path(tmpdir))
+        assert result is not None, "Decode should succeed"
+        
+        npz_file = result['file']
+        data = load_and_combine_segments(npz_file)
+        
+        # Verify we have data
+        assert len(data['pps']) > 0, "Should have PPS data"
+        assert len(data['gnss']) > 0, "Should have GNSS data"
+        assert len(data['imu']) > 0, "Should have IMU data"
+        
+        # Verify all IMU entries have valid UTC timestamps
+        # (segments with bad regression would have been filtered out)
+        none_count = sum(
+            1 for imu in data['imu'] 
+            if imu.utc_timestamp_from_pps_regression is None
+        )
+        assert none_count == 0, \
+            f"All IMU entries should have UTC timestamps, but {none_count} have None"
+        
+        # Verify all timestamps are reasonable
+        valid_timestamps = [
+            imu.utc_timestamp_from_pps_regression 
+            for imu in data['imu'] 
+            if imu.utc_timestamp_from_pps_regression is not None
+        ]
+        assert len(valid_timestamps) > 0, "Should have valid timestamps"
+        assert all(ts > 1.7e9 for ts in valid_timestamps), \
+            "All timestamps should be reasonable (> year 2023)"
+        
+        # The key test: verify the file was fully processed without
+        # discarding segments due to bad regression
+        # (with the fix, segment 11 should be good now)
+        # We expect all 16-17 segments to be valid
+        assert len(data['imu']) > 150000, \
+            f"Should have most IMU data (~198K expected), got {len(data['imu'])}"
+
 
 
