@@ -29,6 +29,7 @@ def main(path: Path) -> None:
     - Time differences between consecutive IMU and GNSS entries
     - PPS mismatch (UTC regression vs closest second)
     - IMU counter vs entry number
+    - Combined micros data (raw vs cleaned/unwrapped) with min/max stats
     """
     logger.info(f"Decoding file: {path}")
 
@@ -68,6 +69,9 @@ def main(path: Path) -> None:
 
     # Plot 6: IMU counter vs entry number
     plot_imu_counter(imu_data, unwrap_stats)
+
+    # Plot 7: Micros data - raw vs cleaned/unwrapped
+    plot_micros_raw_vs_cleaned(pps_data, gnss_data, imu_data, unwrap_stats)
 
     logger.success("All plots created! Close plot windows to exit.")
     plt.show()
@@ -445,6 +449,116 @@ def plot_pps_mismatch(pps_data: np.ndarray) -> None:
 
     plt.tight_layout()
     logger.info("Created PPS mismatch plot")
+
+
+def plot_micros_raw_vs_cleaned(
+    pps_data: np.ndarray,
+    gnss_data: np.ndarray,
+    imu_data: np.ndarray,
+    unwrap_stats: dict | None = None
+) -> None:
+    """Plot raw vs cleaned/unwrapped micros data for PPS, GNSS, and IMU.
+
+    Creates one figure with two subplots showing all three data types:
+    - Left: Raw micros_reading vs normalized index for PPS, GNSS, IMU
+    - Right: Cleaned/unwrapped micros (with jumps excluded) vs normalized index
+
+    Args:
+        pps_data: Array of PPSFix objects
+        gnss_data: Array of GNSSReading objects
+        imu_data: Array of IMUReading objects
+        unwrap_stats: Optional unwrap statistics from decoder
+    """
+    # Create single figure with 2 subplots
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+    fig.suptitle("Micros Data: Raw vs Cleaned/Unwrapped (PPS, GNSS, IMU)",
+                 fontsize=14, fontweight="bold")
+
+    # Plot data for each type
+    data_types = [
+        ("PPS", pps_data, "blue", "o"),
+        ("GNSS", gnss_data, "green", "s"),
+        ("IMU", imu_data, "red", "."),
+    ]
+
+    any_data_plotted = False
+
+    for data_type, data, color, marker in data_types:
+        if len(data) == 0:
+            logger.warning(f"No {data_type} data to plot")
+            continue
+
+        any_data_plotted = True
+
+        # Extract raw and unwrapped micros
+        micros_raw = np.array([entry.micros_reading for entry in data], dtype=np.float64)
+        micros_unwrapped = np.array([entry.micros_reading_unwrapped for entry in data], dtype=np.float64)
+
+        # Get jump indices if available
+        jump_indices = []
+        if unwrap_stats and data_type in unwrap_stats:
+            jump_indices_array = unwrap_stats[data_type].get("micros_reading", {}).get("jump_indices")
+            if jump_indices_array is not None and len(jump_indices_array) > 0:
+                jump_indices = list(jump_indices_array)
+
+        # Create normalized indices (0 to 1)
+        n_entries = len(data)
+        normalized_indices = np.arange(n_entries) / n_entries
+
+        # Create mask for clean data (exclude jumps)
+        clean_mask = np.ones(n_entries, dtype=bool)
+        if jump_indices:
+            clean_mask[jump_indices] = False
+
+        # Extract clean data for statistics
+        micros_unwrapped_clean = micros_unwrapped[clean_mask]
+
+        # Compute min/max for legend
+        raw_min = np.min(micros_raw)
+        raw_max = np.max(micros_raw)
+        clean_min = np.min(micros_unwrapped_clean) if len(micros_unwrapped_clean) > 0 else 0
+        clean_max = np.max(micros_unwrapped_clean) if len(micros_unwrapped_clean) > 0 else 0
+
+        # Left plot: Raw micros
+        markersize = 4 if marker == "o" else (3 if marker == "s" else 0.5)
+        axes[0].plot(normalized_indices, micros_raw, marker=marker, color=color,
+                     linewidth=0, markersize=markersize, alpha=0.6,
+                     label=f"{data_type} (n={n_entries:,}, min={raw_min:.0f}, max={raw_max:.0f})")
+
+        # Right plot: Cleaned/unwrapped micros (only clean data, no jumps)
+        if len(micros_unwrapped_clean) > 0:
+            axes[1].plot(normalized_indices[clean_mask], micros_unwrapped_clean,
+                         marker=marker, color=color, linewidth=0, markersize=markersize, alpha=0.6,
+                         label=f"{data_type} (n={len(micros_unwrapped_clean):,}, "
+                               f"min={clean_min:.0f}, max={clean_max:.0f})")
+
+        # Mark jump locations with crosses on right plot
+        if jump_indices:
+            axes[1].plot(normalized_indices[jump_indices], micros_unwrapped[jump_indices],
+                         "x", color=color, markersize=10, markeredgewidth=2, alpha=0.8,
+                         label=f"{data_type} jumps ({len(jump_indices)})")
+
+    if not any_data_plotted:
+        logger.warning("No data to plot for any data type")
+        plt.close(fig)
+        return
+
+    # Configure left plot
+    axes[0].set_xlabel("Entry Index / Total Entries")
+    axes[0].set_ylabel("Raw Micros Reading")
+    axes[0].set_title("Raw micros_reading")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend(loc="best", fontsize=9)
+
+    # Configure right plot
+    axes[1].set_xlabel("Entry Index / Total Entries")
+    axes[1].set_ylabel("Cleaned/Unwrapped Micros Reading")
+    axes[1].set_title("Cleaned/unwrapped (jumps excluded)")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend(loc="best", fontsize=9)
+
+    plt.tight_layout()
+    logger.info("Created combined micros raw vs cleaned plot for PPS, GNSS, and IMU")
 
 
 if __name__ == "__main__":
