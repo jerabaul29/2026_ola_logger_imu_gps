@@ -256,6 +256,9 @@ class ISM330DHCXSensor {
       return 1;
     }
 
+  public:
+    ism330dhcx_ctx_t reg_ctx;
+ 
   private:
     ISM330DHCXStatusTypeDef Init();
     /*Connection*/
@@ -270,7 +273,6 @@ class ISM330DHCXSensor {
 
     uint8_t acc_is_enabled;
     uint8_t gyro_is_enabled;
-    ism330dhcx_ctx_t reg_ctx;
 };
 
 #ifdef __cplusplus

@@ -592,6 +592,21 @@ void setup() {
     delay(10);
     wdt.restart();
 
+    // interfaces to set and check power modes
+    ism330dhcx_xl_hm_mode_t acc_mode;
+    ism330dhcx_g_hm_mode_t gyro_mode;
+
+    // set power modes
+    // Set high performance mode for accelerometer
+    if (ism330dhcx_xl_power_mode_set(&AccGyr.reg_ctx, ISM330DHCX_HIGH_PERFORMANCE_MD) != 0) {
+      SERIAL_USB->println(F("ERROR: Failed to set ACC high performance mode"));
+    }
+    // Set high performance mode for gyroscope  
+    if (ism330dhcx_gy_power_mode_set(&AccGyr.reg_ctx, ISM330DHCX_GY_HIGH_PERFORMANCE) != 0) {
+      SERIAL_USB->println(F("ERROR: Failed to set GYRO high performance mode"));
+    }
+    SERIAL_USB->println(F("ISM330DHCX set to HIGH PERFORMANCE mode"));
+
     AccGyr.ACC_SetOutputDataRate(ISM330DHCX_ODR_HZ);
     delay(10);
     AccGyr.GYRO_SetOutputDataRate(ISM330DHCX_ODR_HZ);
@@ -635,6 +650,14 @@ void setup() {
     AccGyr.FIFO_Set_Mode(ISM330DHCX_FIFO_MODE);
     delay(10);
     wdt.restart();
+
+    // Verify power modes
+    ism330dhcx_xl_power_mode_get(&AccGyr.reg_ctx, &acc_mode);
+    ism330dhcx_gy_power_mode_get(&AccGyr.reg_ctx, &gyro_mode);
+    SERIAL_USB->print(F("ACC mode: "));
+    SERIAL_USB->println(acc_mode == ISM330DHCX_HIGH_PERFORMANCE_MD ? "HIGH_PERFORMANCE" : "LOW_POWER");
+    SERIAL_USB->print(F("GYRO mode: "));
+    SERIAL_USB->println(gyro_mode == ISM330DHCX_GY_HIGH_PERFORMANCE ? "HIGH_PERFORMANCE" : "NORMAL");
 
     SERIAL_USB->println(F("ISM330DHCX setup complete."));
 
