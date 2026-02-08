@@ -14,6 +14,7 @@ from decoder_cli import plot_micros_raw_vs_cleaned
 class FakePPS:
     micros_reading: int
     micros_reading_unwrapped: int
+    utc_timestamp_from_pps_regression: float = 0.0  # Add missing field
 
 
 # Test 1: Empty data

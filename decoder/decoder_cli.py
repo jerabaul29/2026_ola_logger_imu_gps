@@ -457,21 +457,21 @@ def plot_micros_raw_vs_cleaned(
     imu_data: np.ndarray,
     unwrap_stats: dict | None = None
 ) -> None:
-    """Plot raw vs cleaned/unwrapped micros data for PPS, GNSS, and IMU.
+    """Plot raw micros vs PPS regression-based micros for PPS, GNSS, and IMU.
 
     Creates one figure with two subplots showing all three data types:
     - Left: Raw micros_reading vs normalized index for PPS, GNSS, IMU
-    - Right: Cleaned/unwrapped micros (with jumps excluded) vs normalized index
+    - Right: PPS regression-based micros (UTC timestamp * 1e6) vs normalized index
 
     Args:
         pps_data: Array of PPSFix objects
         gnss_data: Array of GNSSReading objects
         imu_data: Array of IMUReading objects
-        unwrap_stats: Optional unwrap statistics from decoder
+        unwrap_stats: Optional unwrap statistics from decoder (unused, kept for compatibility)
     """
     # Create single figure with 2 subplots
     fig, axes = plt.subplots(1, 2, figsize=(18, 7))
-    fig.suptitle("Micros Data: Raw vs Cleaned/Unwrapped (PPS, GNSS, IMU)",
+    fig.suptitle("Micros Data: Raw vs PPS Regression-Based (PPS, GNSS, IMU)",
                  fontsize=14, fontweight="bold")
 
     # Plot data for each type
@@ -490,34 +490,34 @@ def plot_micros_raw_vs_cleaned(
 
         any_data_plotted = True
 
-        # Extract raw and unwrapped micros
+        # Extract raw micros and PPS regression-based micros
         micros_raw = np.array([entry.micros_reading for entry in data], dtype=np.float64)
-        micros_unwrapped = np.array([entry.micros_reading_unwrapped for entry in data], dtype=np.float64)
-
-        # Get jump indices if available
-        jump_indices = []
-        if unwrap_stats and data_type in unwrap_stats:
-            jump_indices_array = unwrap_stats[data_type].get("micros_reading", {}).get("jump_indices")
-            if jump_indices_array is not None and len(jump_indices_array) > 0:
-                jump_indices = list(jump_indices_array)
-
+        
+        # Extract UTC timestamps from PPS regression and convert to microseconds
+        # utc_timestamp_from_pps_regression is in seconds, multiply by 1e6 for micros
+        utc_timestamps = np.array([entry.utc_timestamp_from_pps_regression for entry in data], dtype=np.float64)
+        
+        # Filter out None/NaN values (entries without PPS regression data)
+        valid_mask = ~np.isnan(utc_timestamps)
+        utc_micros = utc_timestamps * 1e6  # Convert seconds to microseconds
+        
         # Create normalized indices (0 to 1)
         n_entries = len(data)
         normalized_indices = np.arange(n_entries) / n_entries
 
-        # Create mask for clean data (exclude jumps)
-        clean_mask = np.ones(n_entries, dtype=bool)
-        if jump_indices:
-            clean_mask[jump_indices] = False
-
-        # Extract clean data for statistics
-        micros_unwrapped_clean = micros_unwrapped[clean_mask]
-
         # Compute min/max for legend
         raw_min = np.min(micros_raw)
         raw_max = np.max(micros_raw)
-        clean_min = np.min(micros_unwrapped_clean) if len(micros_unwrapped_clean) > 0 else 0
-        clean_max = np.max(micros_unwrapped_clean) if len(micros_unwrapped_clean) > 0 else 0
+        
+        if np.any(valid_mask):
+            utc_micros_valid = utc_micros[valid_mask]
+            utc_min = np.min(utc_micros_valid)
+            utc_max = np.max(utc_micros_valid)
+            n_valid = np.sum(valid_mask)
+        else:
+            utc_min = 0
+            utc_max = 0
+            n_valid = 0
 
         # Left plot: Raw micros
         markersize = 4 if marker == "o" else (3 if marker == "s" else 0.5)
@@ -525,18 +525,13 @@ def plot_micros_raw_vs_cleaned(
                      linewidth=0, markersize=markersize, alpha=0.6,
                      label=f"{data_type} (n={n_entries:,}, min={raw_min:.0f}, max={raw_max:.0f})")
 
-        # Right plot: Cleaned/unwrapped micros (only clean data, no jumps)
-        if len(micros_unwrapped_clean) > 0:
-            axes[1].plot(normalized_indices[clean_mask], micros_unwrapped_clean,
+        # Right plot: PPS regression-based micros (only entries with valid UTC)
+        if n_valid > 0:
+            axes[1].plot(normalized_indices[valid_mask], utc_micros[valid_mask],
                          marker=marker, color=color, linewidth=0, markersize=markersize, alpha=0.6,
-                         label=f"{data_type} (n={len(micros_unwrapped_clean):,}, "
-                               f"min={clean_min:.0f}, max={clean_max:.0f})")
-
-        # Mark jump locations with crosses on right plot
-        if jump_indices:
-            axes[1].plot(normalized_indices[jump_indices], micros_unwrapped[jump_indices],
-                         "x", color=color, markersize=10, markeredgewidth=2, alpha=0.8,
-                         label=f"{data_type} jumps ({len(jump_indices)})")
+                         label=f"{data_type} (n={n_valid:,}, min={utc_min:.0f}, max={utc_max:.0f})")
+        else:
+            logger.warning(f"No valid PPS regression data for {data_type}")
 
     if not any_data_plotted:
         logger.warning("No data to plot for any data type")
@@ -545,20 +540,20 @@ def plot_micros_raw_vs_cleaned(
 
     # Configure left plot
     axes[0].set_xlabel("Entry Index / Total Entries")
-    axes[0].set_ylabel("Raw Micros Reading")
+    axes[0].set_ylabel("Raw Micros Reading (µs)")
     axes[0].set_title("Raw micros_reading")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend(loc="best", fontsize=9)
 
     # Configure right plot
     axes[1].set_xlabel("Entry Index / Total Entries")
-    axes[1].set_ylabel("Cleaned/Unwrapped Micros Reading")
-    axes[1].set_title("Cleaned/unwrapped (jumps excluded)")
+    axes[1].set_ylabel("PPS Regression-Based Micros (µs)")
+    axes[1].set_title("UTC timestamp from PPS regression (× 1e6)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend(loc="best", fontsize=9)
 
     plt.tight_layout()
-    logger.info("Created combined micros raw vs cleaned plot for PPS, GNSS, and IMU")
+    logger.info("Created combined micros raw vs PPS regression-based plot for PPS, GNSS, and IMU")
 
 
 if __name__ == "__main__":
