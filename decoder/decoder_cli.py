@@ -45,6 +45,42 @@ from loguru import logger
 from decoder import decode_file, load_and_combine_segments
 
 
+def compute_plot_limits(data: np.ndarray, outliers: np.ndarray, margin: float = 0.1) -> tuple[float, float]:
+    """Compute plot axis limits based on valid (non-outlier) data.
+    
+    Args:
+        data: Full data array
+        outliers: Boolean array indicating outliers (True = outlier)
+        margin: Fractional margin to add around valid data range (default 0.1 = 10%)
+        
+    Returns:
+        Tuple of (min_limit, max_limit) for axis range
+    """
+    # Get valid (non-outlier) data
+    valid_data = data[~outliers]
+    
+    if len(valid_data) == 0:
+        # Fallback to full data if no valid points
+        valid_data = data
+    
+    if len(valid_data) == 0:
+        # No data at all
+        return (0, 1)
+    
+    # Compute min/max of valid data
+    data_min = np.min(valid_data)
+    data_max = np.max(valid_data)
+    
+    # Add margin
+    data_range = data_max - data_min
+    if data_range == 0:
+        # All values are the same, add a small margin
+        data_range = abs(data_min) * 0.1 if data_min != 0 else 1.0
+    
+    margin_size = data_range * margin
+    return (data_min - margin_size, data_max + margin_size)
+
+
 @click.command()
 @click.option(
     "-p",
@@ -149,6 +185,8 @@ def plot_imu_acceleration(imu_data: np.ndarray) -> None:
     axes[0].set_ylabel("Acc X (mg)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
+    axes[0].set_ylim(compute_plot_limits(acc_x, acc_x_outliers))
+    axes[0].autoscale(enable=False, axis='y')
 
     axes[1].plot(time_relative, acc_y, "g-", linewidth=0.5, label="Acc Y")
     if np.any(acc_y_outliers):
@@ -157,6 +195,8 @@ def plot_imu_acceleration(imu_data: np.ndarray) -> None:
     axes[1].set_ylabel("Acc Y (mg)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
+    axes[1].set_ylim(compute_plot_limits(acc_y, acc_y_outliers))
+    axes[1].autoscale(enable=False, axis='y')
 
     axes[2].plot(time_relative, acc_z, "b-", linewidth=0.5, label="Acc Z")
     if np.any(acc_z_outliers):
@@ -166,6 +206,8 @@ def plot_imu_acceleration(imu_data: np.ndarray) -> None:
     axes[2].set_xlabel("Time since start (seconds)")
     axes[2].grid(True, alpha=0.3)
     axes[2].legend()
+    axes[2].set_ylim(compute_plot_limits(acc_z, acc_z_outliers))
+    axes[2].autoscale(enable=False, axis='y')
 
     plt.tight_layout()
     logger.info("Created acceleration plot with outlier markers")
@@ -206,6 +248,8 @@ def plot_imu_gyroscope(imu_data: np.ndarray) -> None:
     axes[0].set_ylabel("Gyr X (mdps)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
+    axes[0].set_ylim(compute_plot_limits(gyr_x, gyr_x_outliers))
+    axes[0].autoscale(enable=False, axis='y')
 
     axes[1].plot(time_relative, gyr_y, "g-", linewidth=0.5, label="Gyr Y")
     if np.any(gyr_y_outliers):
@@ -214,6 +258,8 @@ def plot_imu_gyroscope(imu_data: np.ndarray) -> None:
     axes[1].set_ylabel("Gyr Y (mdps)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
+    axes[1].set_ylim(compute_plot_limits(gyr_y, gyr_y_outliers))
+    axes[1].autoscale(enable=False, axis='y')
 
     axes[2].plot(time_relative, gyr_z, "b-", linewidth=0.5, label="Gyr Z")
     if np.any(gyr_z_outliers):
@@ -223,6 +269,8 @@ def plot_imu_gyroscope(imu_data: np.ndarray) -> None:
     axes[2].set_xlabel("Time since start (seconds)")
     axes[2].grid(True, alpha=0.3)
     axes[2].legend()
+    axes[2].set_ylim(compute_plot_limits(gyr_z, gyr_z_outliers))
+    axes[2].autoscale(enable=False, axis='y')
 
     plt.tight_layout()
     logger.info("Created gyroscope plot with outlier markers")
@@ -261,6 +309,8 @@ def plot_gnss_coordinates(gnss_data: np.ndarray) -> None:
     axes[0].set_ylabel("Latitude (degrees)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
+    axes[0].set_ylim(compute_plot_limits(latitude, lat_outliers))
+    axes[0].autoscale(enable=False, axis='y')
 
     # Plot longitude
     axes[1].plot(time_relative, longitude, "r-", linewidth=1, label="Longitude")
@@ -271,6 +321,8 @@ def plot_gnss_coordinates(gnss_data: np.ndarray) -> None:
     axes[1].set_xlabel("Time since start (seconds)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
+    axes[1].set_ylim(compute_plot_limits(longitude, lon_outliers))
+    axes[1].autoscale(enable=False, axis='y')
 
     plt.tight_layout()
     logger.info("Created GNSS coordinates plot with outlier markers")
@@ -311,6 +363,8 @@ def plot_gnss_velocities(gnss_data: np.ndarray) -> None:
     axes[0].set_ylabel("Vel North (mm/s)")
     axes[0].grid(True, alpha=0.3)
     axes[0].legend()
+    axes[0].set_ylim(compute_plot_limits(vel_n, vel_n_outliers))
+    axes[0].autoscale(enable=False, axis='y')
 
     # Plot East velocity
     axes[1].plot(time_relative, vel_e, "g-", linewidth=1, label="Vel East")
@@ -320,6 +374,8 @@ def plot_gnss_velocities(gnss_data: np.ndarray) -> None:
     axes[1].set_ylabel("Vel East (mm/s)")
     axes[1].grid(True, alpha=0.3)
     axes[1].legend()
+    axes[1].set_ylim(compute_plot_limits(vel_e, vel_e_outliers))
+    axes[1].autoscale(enable=False, axis='y')
 
     # Plot Down velocity
     axes[2].plot(time_relative, vel_d, "b-", linewidth=1, label="Vel Down")
@@ -330,6 +386,8 @@ def plot_gnss_velocities(gnss_data: np.ndarray) -> None:
     axes[2].set_xlabel("Time since start (seconds)")
     axes[2].grid(True, alpha=0.3)
     axes[2].legend()
+    axes[2].set_ylim(compute_plot_limits(vel_d, vel_d_outliers))
+    axes[2].autoscale(enable=False, axis='y')
 
     plt.tight_layout()
     logger.info("Created GNSS velocities plot with outlier markers")
