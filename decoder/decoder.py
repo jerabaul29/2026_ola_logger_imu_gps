@@ -229,7 +229,7 @@ def unwrap_array(
         values: Array of potentially wrapping values (e.g., micros_reading, counter)
         max_value: Maximum value before wrapping (e.g., 2**32 for uint32, 2**16 for uint16)
         wrap_threshold: Threshold for wrap detection as fraction of max_value
-                       (default: 0.75 * max_value, meaning negative jumps > 75% are wraps)
+                       (default: 0.25 * max_value, meaning negative jumps > 25% are wraps)
         jump_threshold: Threshold for anomalous jump detection
                        (default: 0.1 * max_value for timestamps, 1 for counters)
         initial_offset: Initial unwrap offset from previous segment (default: 0)
@@ -255,7 +255,7 @@ def unwrap_array(
         return np.array([]), None, None, initial_offset, prev_raw_value
 
     if wrap_threshold is None:
-        wrap_threshold = 0.75 * max_value
+        wrap_threshold = 0.25 * max_value
     if jump_threshold is None:
         jump_threshold = 0.1 * max_value
 
@@ -875,6 +875,106 @@ def parse_imu_entry(
         gyr_x_mdps=gyr_x_mdps,
         gyr_y_mdps=gyr_y_mdps,
         gyr_z_mdps=gyr_z_mdps,
+    )
+
+
+def check_micros_consistency(
+    pps_list: list[PPSFix],
+    gnss_list: list[GNSSReading],
+    imu_list: list[IMUReading],
+    segment_idx: int,
+    max_deviation_seconds: float = 10.0
+) -> None:
+    """Check that min/max micros timestamps are consistent across PPS, GNSS, and IMU.
+    
+    After unwrapping, the minimum and maximum micros_reading_unwrapped values
+    across all three data types should be within a reasonable time range
+    (default 10 seconds). This sanity check catches issues like:
+    - Incorrect unwrapping
+    - Mixed data from different time periods
+    - Corruption causing timestamp discontinuities
+    
+    Args:
+        pps_list: List of PPS fixes with micros_reading_unwrapped populated
+        gnss_list: List of GNSS readings with micros_reading_unwrapped populated
+        imu_list: List of IMU readings with micros_reading_unwrapped populated
+        segment_idx: Segment index for logging
+        max_deviation_seconds: Maximum allowed deviation in seconds (default: 10.0)
+    
+    Raises:
+        ValueError: If deviation exceeds threshold
+    """
+    max_deviation_micros = max_deviation_seconds * 1_000_000  # Convert to microseconds
+    
+    # Collect min/max for each data type
+    data_types_info = []
+    
+    if pps_list:
+        pps_micros = [p.micros_reading_unwrapped for p in pps_list if p.micros_reading_unwrapped is not None]
+        if pps_micros:
+            data_types_info.append(("PPS", min(pps_micros), max(pps_micros), len(pps_micros)))
+    
+    if gnss_list:
+        gnss_micros = [g.micros_reading_unwrapped for g in gnss_list if g.micros_reading_unwrapped is not None]
+        if gnss_micros:
+            data_types_info.append(("GNSS", min(gnss_micros), max(gnss_micros), len(gnss_micros)))
+    
+    if imu_list:
+        imu_micros = [i.micros_reading_unwrapped for i in imu_list if i.micros_reading_unwrapped is not None]
+        if imu_micros:
+            data_types_info.append(("IMU", min(imu_micros), max(imu_micros), len(imu_micros)))
+    
+    # Need at least 2 data types to compare
+    if len(data_types_info) < 2:
+        logger.debug(f"Segment {segment_idx}: Only {len(data_types_info)} data type(s) present, skipping consistency check")
+        return
+    
+    # Extract all mins and maxes
+    all_mins = [info[1] for info in data_types_info]
+    all_maxes = [info[2] for info in data_types_info]
+    
+    # Compute deviations
+    min_of_mins = min(all_mins)
+    max_of_mins = max(all_mins)
+    min_of_maxes = min(all_maxes)
+    max_of_maxes = max(all_maxes)
+    
+    deviation_in_mins = max_of_mins - min_of_mins
+    deviation_in_maxes = max_of_maxes - min_of_maxes
+    
+    # Check deviations
+    error_messages = []
+    
+    if deviation_in_mins > max_deviation_micros:
+        deviation_seconds = deviation_in_mins / 1_000_000
+        error_messages.append(
+            f"Min timestamp deviation: {deviation_seconds:.3f}s (> {max_deviation_seconds}s threshold)"
+        )
+        for name, min_val, max_val, count in data_types_info:
+            error_messages.append(f"  {name:5s}: min={min_val:15d} µs  (n={count})")
+    
+    if deviation_in_maxes > max_deviation_micros:
+        deviation_seconds = deviation_in_maxes / 1_000_000
+        error_messages.append(
+            f"Max timestamp deviation: {deviation_seconds:.3f}s (> {max_deviation_seconds}s threshold)"
+        )
+        for name, min_val, max_val, count in data_types_info:
+            error_messages.append(f"  {name:5s}: max={max_val:15d} µs  (n={count})")
+    
+    if error_messages:
+        logger.error(f"❌ Segment {segment_idx}: Micros timestamp consistency check FAILED")
+        for msg in error_messages:
+            logger.error(f"   {msg}")
+        raise ValueError(
+            f"Segment {segment_idx} failed micros consistency check: "
+            f"min deviation={deviation_in_mins/1_000_000:.3f}s, "
+            f"max deviation={deviation_in_maxes/1_000_000:.3f}s"
+        )
+    
+    # Log success at debug level
+    logger.debug(
+        f"Segment {segment_idx}: Micros consistency check passed "
+        f"(min_dev={deviation_in_mins/1_000_000:.3f}s, max_dev={deviation_in_maxes/1_000_000:.3f}s)"
     )
 
 
@@ -2090,6 +2190,41 @@ def decode_file(
         
         # Store unwrap stats for this segment
         all_unwrap_stats[f"segment_{seg_idx:03d}"] = segment_unwrap_stats
+        
+        # Don't carry forward offsets/prev_raw from segments with insufficient data
+        # This prevents anomalous single-entry segments from contaminating next segment's unwrapping
+        # IMPORTANT: When resetting prev_raw, also reset offset to maintain consistency
+        MIN_ENTRIES_FOR_CARRYOVER = 10
+        
+        if len(pps_list) < MIN_ENTRIES_FOR_CARRYOVER:
+            pps_micros_prev_raw = None  # Reset for next segment
+            pps_micros_offset = 0  # Reset offset too
+        if len(gnss_list) < MIN_ENTRIES_FOR_CARRYOVER:
+            gnss_micros_prev_raw = None  # Reset for next segment  
+            gnss_micros_offset = 0  # Reset offset too
+        if len(imu_list) < MIN_ENTRIES_FOR_CARRYOVER:
+            imu_micros_prev_raw = None  # Reset for next segment
+            imu_micros_offset = 0  # Reset offset too
+            imu_counter_prev_raw = None  # Reset for next segment
+            imu_counter_offset = 0  # Reset offset too
+
+        # Sanity check: verify micros timestamps are consistent across data types
+        try:
+            check_micros_consistency(pps_list, gnss_list, imu_list, seg_idx)
+        except ValueError as e:
+            logger.error(f"Segment {seg_idx} failed consistency check: {e}")
+            logger.error(f"This segment will be marked as invalid")
+            segment['regression_valid'] = False
+            # Don't carry forward offsets from failed segments
+            pps_micros_prev_raw = None
+            pps_micros_offset = 0
+            gnss_micros_prev_raw = None
+            gnss_micros_offset = 0
+            imu_micros_prev_raw = None
+            imu_micros_offset = 0
+            imu_counter_prev_raw = None
+            imu_counter_offset = 0
+            continue
 
         # Compute PPS regression for this segment
         logger.info(f"Computing PPS to UTC timestamp regression for segment {seg_idx}...")
