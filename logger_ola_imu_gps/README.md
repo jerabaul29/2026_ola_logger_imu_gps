@@ -13,14 +13,24 @@ I recommend going OLA <-> ISM330DHCX breakout <-> GPS breakout, and keep wires r
 
 In addition, users may want to design a robust power supply, such as:
 
-- batteries: SAFT LSH20 or similar to be power effective in cold conditions
-- regulator: Pololu step up / step down to ensure stable 3.3V supply
-- connect the 3.3V regulated power to the 3V3 OLA pin
-- connect the GND regulated power to the GND OLA pin
+- option 1: non rechargeable batteries
+  - batteries: SAFT LSH20 or similar to be power effective in cold conditions, or usual alcaline batteries in normal conditions; design your power pack to provide around 3.6-4.5V
+  - regulator: Pololu step up / step down to ensure stable 3.3V supply: https://www.pololu.com/product/2122
+  - connect the 3.3V regulated power to the 3V3 OLA pin
+  - connect the GND regulated power to the GND OLA pin
+
+- option 2: rechargeable batteries, SF system
+  - the OLA is compatible out of the box with for example https://www.sparkfun.com/lithium-ion-battery-2ah.html (comes in many different capacities)
+  - also buy a charger: https://www.sparkfun.com/sparkfun-lipo-charger-plus.html or similar
+  - this can be directly plugged to the OLA on the right connector
 
 In order to reach lowest possible power consumption, users may consider to cut the power LED pads on the back of boards that support it (such as the Sparkfun GPS and IMU breakout boards).
 
-Use a good quality SD card to enable power efficient and fast logging. The SD card needs to be formatted as FAT before use. When formatting the card, use the "overwrite" option to make sure it is filled with `\0` bytes, since the files are pre-allocated so this may make it easier to find file end in case the full file length is not used.
+Use a good quality SD card to enable power efficient and fast logging. The SD card needs to be formatted as FAT before use. When formatting the card, use the "overwrite" option to make sure it is filled with `\0` bytes, since the files are pre-allocated so this may make it easier to find file end in case the full file length is not used. The choice of the SD card has a lot to say for performance and power use, and it is difficult to know in advance what cards are good for such small continuous writes - it may be worth testing a bit with different models before ordering a batch!
+
+## PCB
+
+We provide a PCB for a standard OLA logger, with capacity for 3 LSH20 batteries. TODO: release when ready.
 
 ## Notes about the design
 
