@@ -2,11 +2,12 @@
 
 ## Hardware and assembly / connections
 
-This is the code for a data logger with the following properties:
+This is the code for a data logger using the following components:
 
-- main board: SF OLA (Sparkfun OpenLogArtemis) without built-in IMU
-- ISM330DHCX over qwiic IMU (for example, the Sparkfun one)
-- SAM-M10Q over qwiic + PPS interrupt (connect PPS GPS pin to pin 11 OLA) (for example, the Sparkfun one)
+- main board: SF OLA (Sparkfun OpenLogArtemis) without built-in IMU: https://www.sparkfun.com/sparkfun-openlog-artemis-without-imu.html 
+- ISM330DHCX over qwiic IMU (for example, the Sparkfun one): https://www.sparkfun.com/sparkfun-6dof-imu-breakout-ism330dhcx-qwiic.html 
+- SAM-M10Q over qwiic + PPS interrupt (connect PPS GPS pin to pin 11 OLA) (for example, the Sparkfun one): https://www.sparkfun.com/sparkfun-gps-breakout-chip-antenna-sam-m10q-qwiic.html
+- 2 x qwiic cables to connect OLA <-> IMU <-> GPS: https://www.sparkfun.com/flexible-qwiic-cable-50mm.html or similar, depending on your layout / design
 
 I recommend going OLA <-> ISM330DHCX breakout <-> GPS breakout, and keep wires relatively short. The I2C bus is run at 400kHz.
 
